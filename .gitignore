@@ -42,6 +42,7 @@
 !plugins/**/*.py
 !plugins/**/*.yaml
 !scripts/*.py
+!tests/*.py
 !cron/jobs.json
 !docs/*.md
 !memories/*.md
