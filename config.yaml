@@ -134,10 +134,12 @@ memory:
   user_char_limit: 1375
   nudge_interval: 10
   flush_min_turns: 6
+  write_approval: true
 delegation:
   max_iterations: 50
 skills:
-  creation_nudge_interval: 15
+  creation_nudge_interval: 0
+  write_approval: true
 code_execution:
   timeout: 300
   max_tool_calls: 50
