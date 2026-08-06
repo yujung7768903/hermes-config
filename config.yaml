@@ -211,9 +211,6 @@ approvals:
     - '
 
       killall *'
-    - rm -rf /home/*
-    - rm -rf ~/hermes-workspace
-    - rm -rf ~/.hermes
     - '*169.254.169.254*'
     - '*X-aws-ec2-metadata-token*'
 
@@ -228,28 +225,24 @@ approvals:
     - '*chmod*-r*777* /*'
     - '*chown*-r* /*'
 
-    # ── 시스템 디렉토리 삭제 ────────────────────────────────────────────────
-    # 정상 업무에서 rm -rf /etc /usr /bin 등을 실행할 이유 없음
-    - '*rm*-rf*/etc*'
-    - '*rm*-rf*/usr*'
-    - '*rm*-rf*/bin*'
-    - '*rm*-rf*/lib*'
-    - '*rm*-rf*/boot*'
-    - '*rm*-rf*/var*'
-
-    # ── 홈 디렉토리 직접 삭제 변형 ─────────────────────────────────────────
-    # rm -rf /home/* 는 등록돼 있으나 ~/ 형태·절대 경로 직접 지정은 공백
-    - 'rm -rf ~'
-    - '* rm -rf ~'
-    - 'rm*-rf*~/*'
-    - '*rm*-rf*~/*'
-    - '*rm*-rf*/home/hermes*'
-
-    # ── .ssh / .env 직접 삭제 ───────────────────────────────────────────────
-    # ~/.hermes 전체는 등록돼 있으나 .ssh·.env 단독 삭제는 공백
-    - '*rm*~/.ssh*'
-    - '*rm*-rf*~/.ssh*'
-    - '*rm*~/.hermes/.env*'
+    # ── rm 전체 차단 (경로·옵션 무관) ───────────────────────────────────────
+    # 경로·옵션별 패턴(-rf + /etc, ~/.ssh 등 17개)을 이 8개로 대체했다.
+    # 옛 패턴들은 -rf·특정 경로 조합만 잡아 `rm /home/hermes/.hermes/x` 가 통과했고,
+    # 이 목록이 그 전부를 포섭한다 (tests/test_rm_block.py 의 포섭 검증).
+    # rm 앞에 올 수 있는 구분자를 모두 열거: 줄 시작 · 공백 · ; · | · & · ( · ` · " · 개행
+    # security_guard 훅이 미실행·예외로 fail-open 되는 경우의 2차 방어선.
+    # 삭제는 사용자가 직접 실행한다.
+    - rm
+    - rm *
+    - '* rm'
+    - '* rm *'
+    - '*;rm*'
+    - '*|rm*'
+    - '*&rm*'
+    - '*(rm*'
+    - '*`rm*'
+    - '*"rm*'
+    - "*\nrm*"
 hooks_auto_accept: true
 hooks:
   pre_tool_call:

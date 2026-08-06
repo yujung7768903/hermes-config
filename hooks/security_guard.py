@@ -88,34 +88,37 @@ def is_allowed_delete(command: str) -> bool:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# [규칙 1] Slack/Teams에서 파일 삭제 차단
-# terminal 없어도 write_file, patch, 스킬 경유로 삭제 가능하므로
-# 모든 파일 조작 도구를 커버
+# [규칙 1] 파일 삭제 차단
+# terminal 삭제 명령은 전 플랫폼(CLI 포함) 차단.
+#   플랫폼 한정으로 두면 platform 감지 실패(HERMES_SESSION_PLATFORM 미전달,
+#   session_id 형식 불일치) 시 차단이 통째로 무력화되므로 판정에 의존하지 않는다.
+# patch Delete File 지시어는 Slack/Teams 한정 유지.
 # ─────────────────────────────────────────────────────────────────────────────
-if is_remote():
 
-    # terminal: rm, rmdir, shred, unlink, truncate, find -delete 등
-    if tool_name == "terminal":
-        command = str(tool_input.get("command", ""))
-        DELETE_PATTERNS = [
-            r"\brm\b",
-            r"\brmdir\b",
-            r"\bshred\b",
-            r"\bunlink\b",
-            r"\btruncate\b",
-            r"\bfind\b.*-delete\b",
-            r"\bfind\b.*-exec\s+rm\b",
-        ]
-        for pat in DELETE_PATTERNS:
-            if re.search(pat, command, re.IGNORECASE | re.DOTALL):
-                # 허용된 경로에 대한 삭제는 예외 처리
-                if is_allowed_delete(command):
-                    break
-                block(
-                    f"[보안 정책] {platform.upper()} 세션에서는 파일 삭제 명령이 허용되지 않습니다.\n"
-                    f"차단된 명령: {command[:200]}\n"
-                    f"파일 삭제가 필요하다면 CLI 세션에서 직접 실행해 주세요."
-                )
+# terminal: rm, rmdir, shred, unlink, truncate, find -delete 등
+if tool_name == "terminal":
+    command = str(tool_input.get("command", ""))
+    DELETE_PATTERNS = [
+        r"\brm\b",
+        r"\brmdir\b",
+        r"\bshred\b",
+        r"\bunlink\b",
+        r"\btruncate\b",
+        r"\bfind\b.*-delete\b",
+        r"\bfind\b.*-exec\s+rm\b",
+    ]
+    for pat in DELETE_PATTERNS:
+        if re.search(pat, command, re.IGNORECASE | re.DOTALL):
+            # 허용된 경로에 대한 삭제는 예외 처리
+            if is_allowed_delete(command):
+                break
+            block(
+                f"[보안 정책] 파일 삭제 명령은 허용되지 않습니다.\n"
+                f"차단된 명령: {command[:200]}\n"
+                f"삭제가 필요하면 사용자가 직접 실행해야 합니다."
+            )
+
+if is_remote():
 
     # patch: Delete File 지시어 차단
     if tool_name == "patch":

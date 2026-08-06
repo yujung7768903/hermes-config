@@ -59,7 +59,8 @@ security_guard.py의 원격 판정은 두 경로에 의존한다.
 
 ### 0-2. 수정이 필요한 항목
 
-  [높음] Slack에서 rm 1회 테스트 — 규칙 1 발동 확정
+  [완료 2026-08-06 3차] rm 차단을 전 플랫폼으로 이동 — is_remote() 의존 제거.
+         patch Delete File 차단은 여전히 원격 한정이라 미발동 상태다.
   [높음] security_guard.py의 /home/ec2-user/private → /home/hermes/private
   [높음] 원격 채널 toolset을 좁힐지, full access를 유지하고 hook으로만
          통제할지 명시적으로 결정
@@ -153,24 +154,43 @@ terminal 도구 없이도 파일이 삭제됨을 직접 확인했다.
     → Slack/Teams 세션 한정으로 rm 계열 전체 차단
     → CLI에서는 위험한 패턴만 기존 approval 흐름대로
 
+  [2026-08-06 3차 변경] 위 "Slack/Teams 한정" 결론을 폐기하고 rm 을 전 플랫폼
+  차단으로 바꿨다. 사유 두 가지.
+    1. deny 의 rm 패턴이 모두 `-rf` + 특정 경로 조합이라
+       `rm /home/hermes/.hermes/.env` 같은 단순 삭제가 그대로 통과했다.
+    2. 한정 차단은 is_remote() 에 의존하고, 그 판정은 0-1절대로 항상 False 다.
+       즉 rm 차단이 어느 플랫폼에서도 발동하지 않는 상태였다.
+  트레이드오프: 빌드·임시파일 정리도 차단된다. 삭제는 사용자가 직접 실행한다.
+
 
 ---
 
 ## 3. 최종 결정 및 현재 구현 상태
 
-### [구현 완료] 규칙 1 — Slack/Teams 파일 삭제 차단
+### [구현 완료] 규칙 1 — 파일 삭제 차단
 
-방식: security_guard.py (pre_tool_call hook)
+방식: security_guard.py (pre_tool_call hook) + config.yaml approvals.deny
 
 차단 대상:
   terminal 도구: rm, rmdir, shred, unlink, truncate, find -delete, find -exec rm
+    → 전 플랫폼(CLI 포함). is_remote() 판정에 의존하지 않는다.
   patch 도구: *** Delete File: 지시어
+    → Slack/Teams 한정 (기존 유지)
+  approvals.deny: rm 을 명령 토큰으로 잡는 패턴 11개 (경로·옵션별 옛 패턴 17개 대체)
+    → 훅이 미실행·예외로 fail-open 되는 경우의 2차 방어선
 
-적용 파일: /home/hermes/.hermes/hooks/security_guard.py
+예외: ALLOWED_DELETE_PATHS (현재 ~/.hermes/skills/delete_test 만)
+
+적용 파일: /home/hermes/.hermes/hooks/security_guard.py, ~/.hermes/config.yaml
+검증: tests/test_rm_block.py (deny 패턴 + 훅 subprocess 실행, 27건)
 
   [2026-08-06 정정] 구현은 완료됐으나 실제 발동은 미검증이다.
   이 규칙은 is_remote() 판정에 의존하는데, 관측된 모든 로그에서
   platform 값이 비어 있다. 0-1절 참조.
+
+  [2026-08-06 3차] 위 미검증 사유를 해소했다. terminal 삭제 차단을
+  is_remote() 밖으로 빼서 platform 값이 비어 있어도 발동한다.
+  patch Delete File 차단은 여전히 is_remote() 에 의존하므로 미발동 상태다.
 
 
 ### [구현 완료] 규칙 2 — ~/private 접근 차단 (전 플랫폼)
@@ -444,19 +464,21 @@ terminal 도구 없이도 파일이 삭제됨을 직접 확인했다.
 | `*X-aws-ec2-metadata-token*` | IMDSv2 토큰 발급 | 전 플랫폼 |
 | `*chmod*777* /*` | 루트 전체 권한 변경 | 전 플랫폼 |
 | `*chown*-r* /*` | 루트 소유권 변경 | 전 플랫폼 |
-| `*rm*-rf*/etc*` 외 `/usr*`, `/bin*`, `/lib*`, `/boot*`, `/var*` | 시스템 디렉토리 삭제 | 전 플랫폼 |
-| `rm -rf ~`, `*rm*-rf*~/*`, `*rm*-rf*/home/hermes*` | 홈 디렉토리 직접 삭제 | 전 플랫폼 |
-| `rm -rf ~/.hermes`, `rm -rf ~/hermes-workspace` | Hermes 설정 삭제 | 전 플랫폼 |
-| `*rm*~/.ssh*`, `*rm*~/.hermes/.env*` | SSH 키 · .env 삭제 | 전 플랫폼 |
-| `rm -rf /home/*` | 홈 디렉토리 전체 삭제 | 전 플랫폼 |
+| `rm`, `rm *`, `* rm`, `* rm *`, `*;rm*`, `*\|rm*`, `*&rm*`, `*(rm*`, `` *`rm* ``, `*"rm*`, `*\nrm*` | rm 전체 차단 (경로·옵션 무관). rm 앞에 올 수 있는 구분자를 열거 | 전 플랫폼 |
+
+  [2026-08-06 3차] 경로·옵션별 rm 패턴 17개(`*rm*-rf*/etc*`, `rm -rf ~`,
+  `*rm*~/.ssh*`, `rm -rf /home/*` 등)를 위 11개로 대체했다. 옛 패턴은 `-rf` +
+  특정 경로 조합만 잡아 `rm /home/hermes/.hermes/.env` 가 통과했다.
+  대체 전후 커버리지는 tests/test_rm_block.py 의 포섭 검증으로 확인한다
+  (제거한 17개가 잡던 1710조합 중 누락 0건).
 
 
 ### 6-4. L2 — security_guard.py 차단 규칙 상세
 
 | 규칙 ID | 적용 플랫폼 | 대상 도구 | 차단 조건 | 차단 메시지 |
 |---------|-------------|-----------|-----------|-------------|
-| R1-1 | Slack/Teams (원격) | terminal | `rm`, `rmdir`, `shred`, `unlink`, `truncate` 포함 | [보안 정책] 원격 채널에서 파일 삭제 명령은 허용되지 않습니다. |
-| R1-2 | Slack/Teams (원격) | terminal | `find ... -delete` 또는 `find ... -exec rm` 패턴 | 동일 |
+| R1-1 | 전 플랫폼 | terminal | `rm`, `rmdir`, `shred`, `unlink`, `truncate` 포함 | [보안 정책] 파일 삭제 명령은 허용되지 않습니다. |
+| R1-2 | 전 플랫폼 | terminal | `find ... -delete` 또는 `find ... -exec rm` 패턴 | 동일 |
 | R1-3 | Slack/Teams (원격) | patch | `*** Delete File:` 지시어 포함 | [보안 정책] 원격 채널에서 파일 삭제 명령은 허용되지 않습니다. |
 | R2-1 | 전 플랫폼 | read_file | path가 `~/private` 하위 | [보안 정책] 접근 금지 디렉토리입니다. ~/hermes-workspace/ 로 복사 후 이용하세요. |
 | R2-2 | 전 플랫폼 | write_file | path가 `~/private` 하위 | 동일 |
