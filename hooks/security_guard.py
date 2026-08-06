@@ -165,8 +165,7 @@ for t, keys in FILE_PATH_TOOLS.items():
                 block(
                     f"[보안 정책] 접근 금지 디렉토리입니다.\n"
                     f"경로: {val}\n"
-                    f"~/private 및 하위 디렉토리는 Hermes 접근이 차단됩니다.\n"
-                    f"접근이 필요하다면 ~/hermes-workspace/ 로 복사 후 이용하세요."
+                    f"~/private 및 하위 디렉토리는 Hermes 접근이 차단됩니다."
                 )
 
 if tool_name == "patch":
