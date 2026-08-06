@@ -1,0 +1,45 @@
+{
+  "jobs": [
+    {
+      "id": "2a7912f3e65b",
+      "name": "slack-improvement-report",
+      "prompt": "",
+      "skills": [],
+      "skill": null,
+      "model": null,
+      "provider": null,
+      "provider_snapshot": null,
+      "model_snapshot": null,
+      "base_url": null,
+      "script": "/home/hermes/.hermes/scripts/slack_improvement_report.py",
+      "no_agent": true,
+      "context_from": null,
+      "schedule": {
+        "kind": "cron",
+        "expr": "0 6 * * 1-5",
+        "display": "0 6 * * 1-5"
+      },
+      "schedule_display": "0 6 * * 1-5",
+      "repeat": {
+        "times": null,
+        "completed": 8
+      },
+      "enabled": true,
+      "state": "scheduled",
+      "paused_at": null,
+      "paused_reason": null,
+      "created_at": "2026-07-28T04:03:23.975103+00:00",
+      "next_run_at": "2026-08-07T06:00:00+00:00",
+      "last_run_at": "2026-08-06T06:00:27.641432+00:00",
+      "last_status": "ok",
+      "last_error": null,
+      "last_delivery_error": null,
+      "deliver": "local",
+      "origin": null,
+      "enabled_toolsets": null,
+      "workdir": null,
+      "fire_claim": null
+    }
+  ],
+  "updated_at": "2026-08-06T06:00:27.642019+00:00"
+}

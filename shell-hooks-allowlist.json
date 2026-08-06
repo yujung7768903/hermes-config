@@ -1,0 +1,22 @@
+{
+  "approvals": [
+    {
+      "approved_at": "2026-07-27T09:26:32.557060Z",
+      "command": "python3 /home/ec2-user/.hermes/hooks/security_guard.py",
+      "event": "pre_tool_call",
+      "script_mtime_at_approval": "2026-07-24T09:24:46.670633Z"
+    },
+    {
+      "approved_at": "2026-07-30T02:04:00.543873Z",
+      "command": "python3 /home/hermes/.hermes/hooks/security_guard.py",
+      "event": "pre_tool_call",
+      "script_mtime_at_approval": "2026-07-29T06:31:50.234843Z"
+    },
+    {
+      "approved_at": "2026-08-06T08:58:06.169128Z",
+      "command": "python3 /home/hermes/.hermes/hooks/message_trigger.py",
+      "event": "pre_gateway_dispatch",
+      "script_mtime_at_approval": null
+    }
+  ]
+}

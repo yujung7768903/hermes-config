@@ -1,0 +1,6 @@
+name: deploy-log
+version: 1.0.0
+description: "Slack /배포 슬래시 커맨드 — Block Kit 모달로 배포 정보를 입력받아 채널에 공지하고 SQLite에 기록한다."
+author: local
+hooks:
+  - on_session_start

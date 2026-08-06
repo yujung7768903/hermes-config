@@ -1,0 +1,53 @@
+# 전부 무시하고 필요한 것만 되살린다.
+# .env(실토큰)·state.db(38M)·logs 가 같은 디렉터리에 있어서
+# 블랙리스트로는 새 파일이 생길 때마다 새는 사고가 난다.
+*
+
+# 디렉터리는 순회를 허용해야 하위 화이트리스트가 동작한다
+!*/
+
+# 순회조차 하지 않을 큰 트리. 루트 기준으로 고정한다 —
+# 앞에 / 가 없으면 plugins/deploy-log 같은 동명 하위 디렉터리까지 잡는다
+/hermes-agent/
+/node/
+/bin/
+/lsp/
+/sandboxes/
+/logs/
+/sessions/
+/pastes/
+/cache/
+/images/
+/image_cache/
+/audio_cache/
+/gateway/
+/platforms/
+/profiles/
+/history/
+/deploy-log/
+/kanban/
+/pairing/
+/skills/.hub/
+/skills/.curator_backups/
+/cron/output/
+
+# 추적 대상
+!.gitignore
+!.env.example
+!config.yaml
+!SOUL.md
+!shell-hooks-allowlist.json
+!slack-manifest.json
+!hooks/*.py
+!plugins/**/*.py
+!plugins/**/*.yaml
+!scripts/*.py
+!cron/jobs.json
+!docs/*.md
+!memories/*.md
+!skills/deploy-log/**
+!skills/token-usage/**
+
+# 어디에 있든 제외
+__pycache__/
+*.pyc
