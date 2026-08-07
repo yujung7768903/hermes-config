@@ -431,6 +431,7 @@ terminal 도구 없이도 파일이 삭제됨을 직접 확인했다.
 |------|------|------|---------------|
 | 1 | 메시지 수신 | Slack/Teams/CLI 등 채널에서 사용자 메시지 수신 | - |
 | 2 | Gateway (Platform Adapter) | 채널별 어댑터가 메시지를 Hermes 내부 형식으로 변환 | platform_toolsets 화이트리스트 적용 |
+| 2.5 | pre_gateway_dispatch hook | 메시지를 모델에 넘기기 직전 hook 체인 실행. 반환값으로 통과·무시·교체 결정 | 지점 존재, 차단 로직 없음 (LG) |
 | 3 | Hermes AI (모델 판단) | LLM이 요청을 해석하고 어떤 도구를 호출할지 결정 | 없음 (날 메시지가 그대로 도달) |
 | 4 | model_tools.py | 도구 호출 직전 처리 단계 | approvals.deny 패턴 매칭 (L1) |
 | 5 | pre_tool_call hook | 도구 실행 직전 hook 체인 실행 | security_guard.py 차단 로직 실행 (L2) |
@@ -438,16 +439,16 @@ terminal 도구 없이도 파일이 삭제됨을 직접 확인했다.
 | 7 | transform_tool_result | 도구 결과가 모델에 전달되기 직전 | security-filter 플러그인 민감 정보 마스킹 (L3) |
 | 8 | 응답 반환 | 결과를 채널로 전송 | - |
 
-※ 3단계(모델 판단) 이전에는 보안 개입 지점이 없다.
-  모델이 악의적 프롬프트를 처리하는 것 자체를 막는 레이어는 현재 미구현이다.
-
-  [2026-08-06 3차 정정] "개입 지점이 없다"는 서술은 사실이 아니다.
-  2단계와 3단계 사이에 pre_gateway_dispatch 훅이 있고, 이미
-  hooks/message_trigger.py 가 그 훅으로 동작 중이다(config.yaml:258).
-  반환 규약은 None(통과) / {"action":"skip"}(무시) /
-  {"action":"rewrite","text":...}(교체) 다. 즉 지점은 있고 차단 로직만
-  비어 있었다. 이 지점을 화이트리스트 게이트로 쓰는 계획은
+※ 3단계(모델 판단) 이전 개입 지점은 2.5단계(pre_gateway_dispatch)다.
+  지점은 존재하고 이미 hooks/message_trigger.py 가 그 훅으로 동작하지만,
+  트리거 문구 처리 용도이고 보안 차단 로직은 없다.
+  따라서 악의적 프롬프트가 모델에 도달하는 것 자체를 막는 레이어는 미구현이다.
+  이 지점을 화이트리스트 게이트로 쓰는 계획은
   hermes-request-whitelist-plan.md 참조.
+
+  [2026-08-06 3차 정정] 이 표에는 원래 2.5단계가 없었고 "3단계 이전에는
+  보안 개입 지점이 없다"고 적혀 있었다. 사실이 아니다 — 지점은 처음부터
+  있었고 차단 로직만 비어 있었다.
 
 
 ### 6-2. 보안 계층 상세
@@ -455,6 +456,7 @@ terminal 도구 없이도 파일이 삭제됨을 직접 확인했다.
 | 계층 | 계층명 | 구현 위치 | 적용 플랫폼 | 차단 방식 | yolo/mode=off 우회 | 구현 상태 |
 |------|--------|-----------|-------------|-----------|-------------------|-----------||
 | L0 | Platform Toolsets 화이트리스트 | config.yaml `platform_toolsets` + `toolsets.py` | 채널별 설정 | 채널에 등록되지 않은 toolset은 도구 자체가 노출되지 않음 | 우회 불가 (설정 레벨) | 설정됨. **원격 채널에는 실효 없음** — hermes-slack이 코어 툴 전체를 포함 |
+| LG | 요청 화이트리스트 게이트 | config.yaml `hooks.pre_gateway_dispatch` (현재 등록된 것은 message_trigger.py 뿐) | gateway 경유 채널. CLI·cron 통과 여부 미확인 | 모델 입력 직전 메시지를 검사해 `skip`(무시) 또는 `rewrite`(교체), 허용 시 통과 | hook이 dispatch를 막으면 모델 호출 자체가 없음 (미검증) | **미구현** — 지점만 존재. 계획: hermes-request-whitelist-plan.md |
 | L1 | Approvals Deny | config.yaml `approvals.deny` | 전 플랫폼 | 패턴 매칭된 명령은 모델 판단과 무관하게 실행 거부 | 우회 불가 | 완료 |
 | L2 | pre_tool_call Hook | security_guard.py | 설정에 따라 전 플랫폼 또는 원격 한정 | 도구 호출 직전 인자를 검사해 차단 또는 허용 | hook이 deny 반환하면 실행 안 됨 | 완료 |
 | L3 | transform_tool_result | security-filter 플러그인 | 전 플랫폼 | 도구 결과에서 민감 정보 정규식 마스킹 | - | 완료 |
@@ -543,8 +545,9 @@ terminal 도구 없이도 파일이 삭제됨을 직접 확인했다.
 
 ### 6-6. hook 적용 범위 외 영역
 
-hook은 Hermes AI가 도구를 호출하는 순간에만 개입한다.
+pre_tool_call hook은 Hermes AI가 도구를 호출하는 순간에만 개입한다.
 아래 경우에는 hook이 전혀 영향을 주지 않는다.
+(모델 입력 자체에 개입할 수 있는 pre_gateway_dispatch 는 6-1 표 2.5단계 참조)
 
 | 영역 | 설명 |
 |------|------|
@@ -552,7 +555,7 @@ hook은 Hermes AI가 도구를 호출하는 순간에만 개입한다.
 | cron 스크립트 | Hermes cron 또는 시스템 cron이 독립적으로 실행하는 스크립트 |
 | 백그라운드 프로세스 | 이미 실행 중인 프로세스가 내부적으로 호출하는 명령 |
 | Gateway 내부 동작 | Hermes gateway가 직접 실행하는 subprocess.run 등 내부 로직 |
-| 모델 판단 전 입력 | 사용자 메시지 자체에 대한 필터링 없음 (프롬프트 인젝션 방어 미구현) |
+| 모델 판단 전 입력 | 사용자 메시지 자체에 대한 필터링 없음 (프롬프트 인젝션 방어 미구현). pre_tool_call 로는 도달할 수 없는 영역이고, pre_gateway_dispatch(LG)가 이 자리를 채울 지점이다 |
 
 
 ### 6-7. hook 밖에 있는 방어 장치 [2026-08-06 추가]
