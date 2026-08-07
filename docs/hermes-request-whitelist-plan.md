@@ -21,15 +21,17 @@
 
 ## 2. 확인된 사실
 
-새 개입 지점을 만들 필요 없음. `pre_gateway_dispatch` 훅이 이미 그 자리에 있고, 이미 사용 중임.
+새 개입 지점을 만들 필요 없음. `pre_gateway_dispatch` 훅이 이미 그 자리에 있음.
 
 | 항목 | 확인 내용 | 근거 |
 | --- | --- | --- |
-| 훅 존재 | `hooks.pre_gateway_dispatch` 등록 가능 | config.yaml:258-260 |
-| 반환 규약 | `None` 통과 / `{"action":"skip"}` 무시 / `{"action":"rewrite","text":...}` 교체 | hooks/message_trigger.py 도입부 |
-| 메시지 위치 | `payload["extra"]["event"]["text"]` | hooks/message_trigger.py |
-| 선례 | message_trigger.py 가 같은 훅으로 동작 중 | shell-hooks-allowlist.json |
+| 훅 존재 | `hooks.pre_gateway_dispatch` 등록 가능 | config.yaml `hooks` 절 |
 | 훅 등록 절차 | command + script_mtime 승인 필요 | shell-hooks-allowlist.json |
+
+반환 규약(`None` 통과 / `{"action":"skip"}` 무시 / `{"action":"rewrite","text":...}` 교체)과
+메시지 위치(`payload["extra"]["event"]["text"]`)는 원래 hooks/message_trigger.py 도입부를
+근거로 적어 뒀으나, 그 파일은 사용자가 등록하지 않은 트리거 훅이라 2026-08-07 에 제거했다.
+구현 착수 전에 Hermes 코어 문서로 두 항목을 다시 확인해야 함.
 
 기존 문서 정정 대상 — hermes-security-policy.md 6-1 표의 "3단계(모델 판단) 이전에는 보안
 개입 지점이 없다"는 서술은 사실과 다름. 지점은 있고 비어 있었을 뿐임.

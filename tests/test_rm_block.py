@@ -76,12 +76,13 @@ for desc, cmd, expect in CASES:
     ok, fail = (ok + 1, fail) if mark == "PASS" else (ok, fail + 1)
     print(f"  {mark}  {desc:30s}  {'차단' if caught else '통과'}")
 
-print("\n── L2 예외 경로(ALLOWED_DELETE_PATHS) ──")
+print("\n── L2 삭제 예외 경로 없음 ──")
+# 예전에 delete_test 트리거용으로 뚫려 있던 예외 경로가 되살아나지 않았는지 확인
 allowed_cmd = "rm -rf /home/hermes/.hermes/skills/delete_test"
 caught = guard_blocks(allowed_cmd, platform="")
-mark = "PASS" if not caught else "FAIL"
+mark = "PASS" if caught else "FAIL"
 ok, fail = (ok + 1, fail) if mark == "PASS" else (ok, fail + 1)
-print(f"  {mark}  delete_test 경로는 훅 통과      {'차단' if caught else '통과'}")
+print(f"  {mark}  delete_test 경로도 차단          {'차단' if caught else '통과'}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
