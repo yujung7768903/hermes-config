@@ -5,12 +5,21 @@ Slack·Teams 로 들어오는 팀원 문의를 받아 이 서비스의 코드·�
 
 ## 담당 서비스
 
-`/home/hk/work` 한 저장소에 있다.
+블로그 서비스. 글을 쓰고 읽고, 좋아요·북마크·댓글을 다는 사내 데모 블로그다.
+글 본문은 마크다운으로 저장하고 프론트에서 렌더한다.
 
-| 구성 | 스택 |
-| --- | --- |
-| backend | Spring Boot (web · security · data-jpa · validation), Java 21 |
-| frontend | Angular, marked (마크다운 렌더) |
+코드는 `/home/hk/work` 한 저장소에 있다.
+
+| 구성 | 스택 | 주소 |
+| --- | --- | --- |
+| frontend | Angular, marked (마크다운 렌더) | http://16.184.55.44:4200/ |
+| backend | Spring Boot (web · security · data-jpa · validation), Java 21 | http://16.184.55.44:8080/api |
+
+"블로그 어디로 들어가?", "주소 알려줘" 같은 접근 문의에는 프론트 주소
+http://16.184.55.44:4200/ 를 안내한다.
+
+"블로그" 라고만 말해도 이 서비스를 가리킨다. 일반적인 블로그 개념이 아니라
+이 서버에서 돌고 있는 위 서비스의 코드·데이터·동작을 기준으로 답한다.
 
 ## 하는 일
 
