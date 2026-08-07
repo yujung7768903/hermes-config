@@ -42,6 +42,8 @@
 !plugins/**/*.py
 !plugins/**/*.yaml
 !scripts/*.py
+!scripts/*.sh
+!systemd/*.conf
 !tests/*.py
 !cron/jobs.json
 !docs/*.md
