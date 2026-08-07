@@ -125,7 +125,10 @@ def collect(repo: Path) -> Dict:
 
 # ─── Block Kit ────────────────────────────────────────────────────────────────
 
-def build_blocks(info: Dict, now: datetime) -> List[Dict]:
+DEFAULT_TITLE = "Hermes 보안 탐지 리포트"
+
+
+def build_blocks(info: Dict, now: datetime, title: str = DEFAULT_TITLE) -> List[Dict]:
     ts = now.strftime("%Y-%m-%d %H:%M KST")
     changes = info["changes"]
 
@@ -133,7 +136,7 @@ def build_blocks(info: Dict, now: datetime) -> List[Dict]:
         return [{
             "type": "section",
             "text": {"type": "mrkdwn", "text": (
-                f":white_check_mark: *Hermes 보안 탐지 리포트* ({ts})\n"
+                f":white_check_mark: *{title}* ({ts})\n"
                 f"`~/.hermes` 에 커밋되지 않은 변경사항이 없습니다."
             )},
         }]
@@ -141,7 +144,7 @@ def build_blocks(info: Dict, now: datetime) -> List[Dict]:
     blocks: List[Dict] = [{
         "type": "section",
         "text": {"type": "mrkdwn", "text": (
-            f":rotating_light: *Hermes 보안 탐지 리포트* ({ts})\n"
+            f":rotating_light: *{title}* ({ts})\n"
             f"`~/.hermes` 에 커밋되지 않은 변경사항 *{len(changes)}건* 이 있습니다."
         )},
     }, {"type": "divider"}]
