@@ -475,7 +475,7 @@ L2 규칙 4(SOUL.md 자기수정 차단)와 L1 의 `*soul.md*` 패턴은 LK 가 
 | 제외 | `logs/`, `sessions/`, `cache/`, `cron/`, `pastes/` 및 최상위 런타임 파일 | 게이트웨이가 상시 기록 |
 
 `cron/jobs.json` 은 스케줄러가 `next_run_at`·`last_run_at` 을 계속 써야 해서 동결할 수
-없다. 크론 잡 등록 차단은 LK 로 해결되지 않는 잔여 항목이다.
+없다. LK 로 해결되지 않으므로 크론 잡 등록 차단은 L1·L2 가 담당한다 (규칙 5, 6-4 표 R5).
 
 `config.yaml` 동결의 부작용 — `tools/approval.py` 의 영구 allowlist 저장이 EROFS 로
 실패한다. 에이전트가 승인 이력을 설정에 굳히지 못하게 하는 것이 목적이므로 의도된 동작이다.
@@ -496,6 +496,8 @@ L2 규칙 4(SOUL.md 자기수정 차단)와 L1 의 `*soul.md*` 패턴은 LK 가 
 | `*chmod*777* /*` | 루트 전체 권한 변경 | 전 플랫폼 |
 | `*chown*-r* /*` | 루트 소유권 변경 | 전 플랫폼 |
 | `rm`, `rm *`, `* rm`, `* rm *`, `*;rm*`, `*\|rm*`, `*&rm*`, `*(rm*`, `` *`rm* ``, `*"rm*`, `*\nrm*` | rm 전체 차단 (경로·옵션 무관). rm 앞에 올 수 있는 구분자를 열거 | 전 플랫폼 |
+| `*cron create*` 외 변경 서브커맨드 9개, `*crontab*`, `*systemd-run*`, `*systemctl*timer*`, `at *` 계열 5개 | 배치(크론 잡) 등록·변경. 조회는 미포함 | 전 플랫폼 |
+| `*>*jobs.json*`, `*tee*jobs.json*`, `*sed*-i*jobs.json*`, `*cp*jobs.json*`, `*mv*jobs.json*`, `*python*jobs.json*` | 잡 저장소 직접 편집 | 전 플랫폼 |
 
   [2026-08-06 3차] 경로·옵션별 rm 패턴 17개(`*rm*-rf*/etc*`, `rm -rf ~`,
   `*rm*~/.ssh*`, `rm -rf /home/*` 등)를 위 11개로 대체했다. 옛 패턴은 `-rf` +
@@ -536,6 +538,18 @@ L2 규칙 4(SOUL.md 자기수정 차단)와 L1 의 `*soul.md*` 패턴은 LK 가 
 | R4-1 | 전 플랫폼 | write_file | path가 `~/.hermes/SOUL.md` | [보안 정책] SOUL.md 는 Hermes 가 수정할 수 없습니다. |
 | R4-2 | 전 플랫폼 | patch | Update/Create/Delete File 대상이 `~/.hermes/SOUL.md` | 동일 |
 | R4-3 | 전 플랫폼 | terminal | `SOUL.md` 언급 + 쓰기 수단(`>`·`tee`·`sed -i`·`cp`·`mv`·`ln`·`truncate`·`dd`·`chmod`·`chown`·`open(`·`git checkout/restore/apply`) | 동일 |
+
+| R5-1 | 전 플랫폼 | terminal | `cron` + 변경 서브커맨드(create·add·new·update·edit·set·enable·disable·delete·remove) | [보안 정책] 배치(크론 잡) 등록·변경은 허용되지 않습니다. |
+| R5-2 | 전 플랫폼 | terminal | `crontab` · `systemd-run` · `systemctl *.timer` · `at <시각\|now>` | 동일 |
+| R5-3 | 전 플랫폼 | terminal | `jobs.json` 언급 + 쓰기 수단(R4-3 과 동일 목록) | 동일 |
+| R5-4 | 전 플랫폼 | write_file | path가 `~/.hermes/cron/jobs.json` | 동일 |
+| R5-5 | 전 플랫폼 | patch | Update/Create/Delete File 대상이 `~/.hermes/cron/jobs.json` | 동일 |
+
+R5 의 차단 지점은 스크립트 위치가 아니라 등록 행위다. `~/.hermes/scripts/` 가 LK 로
+읽기전용이면 에이전트는 `~/work/` 에 스크립트를 두거나 스크립트 없는 프롬프트 기반
+잡으로 우회하는데, 두 경로 모두 스케줄러 등록을 거치므로 그 지점 하나로 포섭된다
+(2026-08-07 `daily-farewell` 사례. `cron-jobs.md` 참조). 조회(`cron list`·`show`,
+`cat jobs.json`)는 통과하고, 관리자가 ssh 로 실행하는 등록은 훅 밖이라 영향받지 않는다.
 
 R4 는 읽기를 막지 않는다. `cat`·`grep`·`wc` 는 통과하고, `git pull` 은 SOUL.md 를
 명시하지 않으므로 걸리지 않는다 — 관리자 로컬 수정 → git push → pull 이 유일한

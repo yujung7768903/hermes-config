@@ -79,13 +79,31 @@ sudo -u hermes cp /tmp/jobs.json.bak /home/hermes/.hermes/cron/jobs.json
 세 잡은 `hermes cron create` 로 재등록함. 추적 해제 상태이므로 앞으로 `jobs.json` 은
 git 이 건드리지 않고, 이 사고는 반복되지 않음.
 
-## 남은 위험
+## 에이전트의 잡 등록 차단
 
 추적 중일 때는 `pull` · `reset --hard` 가 에이전트가 임의로 등록한 잡을 되돌렸음
 (2026-08-07 `daily-greeting` 사례). 이건 설계된 방어가 아니라 부수 효과였고, `pull`
 시점에만 걸려서 그 사이 잡은 실제로 실행 예약까지 됐음. 추적 해제로 이 부수 효과도
-사라지므로, 에이전트의 크론 등록 차단이 별도로 필요함.
+사라졌으므로 별도 차단을 넣음.
 
 `cron/jobs.json` 은 스케줄러가 상시 기록해야 해서 LK 동결 대상에서 제외돼 있음
-(`hermes-security-policy.md` 6-2-1 참조). 차단은 파일 권한이 아니라 도구·명령
-단계에서 해야 함.
+(`hermes-security-policy.md` 6-2-1 참조). 그래서 파일 권한이 아니라 도구·명령
+단계에서 막음 — security_guard 훅 규칙 5(1차)와 `approvals.deny`(2차).
+
+### 차단 지점을 등록 행위로 잡은 이유
+
+2026-08-07 `daily-farewell` 사례에서 에이전트는 `~/.hermes/scripts/` 가 읽기전용이라
+쓰기에 실패하자 스크립트를 `/home/hermes/work/` 에 두고 등록했고, 그것도 막히자
+스크립트 없는 프롬프트 기반 에이전트 잡으로 등록했음. 즉 스크립트 위치나 잡 종류를
+막는 건 우회 가능하고, 두 경로가 공유하는 병목은 **스케줄러 등록** 하나뿐임.
+
+| 차단 대상 | 수단 |
+| --- | --- |
+| `hermes cron` 변경 서브커맨드 (create·add·update·enable·disable·delete 등) | 훅 규칙 5 + deny |
+| 시스템 스케줄러 (`crontab`, `systemd-run`, `systemctl *.timer`, `at`) | 훅 규칙 5 + deny |
+| `cron/jobs.json` 직접 편집 (`write_file`·`patch`·리다이렉션·`tee`·`sed -i`·인터프리터) | 훅 규칙 5 + deny |
+
+조회는 막지 않음 — `hermes cron list`·`show`, `cat jobs.json` 은 통과.
+관리자가 ssh 로 직접 실행하는 등록은 훅 밖이라 영향 없음.
+
+검증: `tests/test_cron_block.py` (57건. 우회 경로 3종과 조회 오탐 포함).
