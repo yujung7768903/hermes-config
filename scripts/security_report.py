@@ -115,14 +115,12 @@ def churn_text(path: str, stat: Dict[str, Tuple[int, int]]) -> str:
 # ─── 수집 ─────────────────────────────────────────────────────────────────────
 
 def collect(repo: Path) -> Dict:
-    branch = git(repo, "rev-parse", "--abbrev-ref", "HEAD").strip()
-    head = git(repo, "log", "-1", "--format=%h %ad %s", "--date=format:%Y-%m-%d %H:%M").strip()
     changes = parse_status(git(repo, "status", "--porcelain=v1", "-z"))
 
     stat = parse_numstat(git(repo, "diff", "--numstat"))
     stat.update(parse_numstat(git(repo, "diff", "--cached", "--numstat")))
 
-    return {"branch": branch, "head": head, "changes": changes, "stat": stat}
+    return {"changes": changes, "stat": stat}
 
 
 # ─── Block Kit ────────────────────────────────────────────────────────────────
@@ -136,8 +134,7 @@ def build_blocks(info: Dict, now: datetime) -> List[Dict]:
             "type": "section",
             "text": {"type": "mrkdwn", "text": (
                 f":white_check_mark: *Hermes 보안 탐지 리포트* ({ts})\n"
-                f"`~/.hermes` 에 커밋되지 않은 변경사항이 없습니다.\n"
-                f"_{info['branch']} @ {info['head']}_"
+                f"`~/.hermes` 에 커밋되지 않은 변경사항이 없습니다."
             )},
         }]
 
@@ -145,8 +142,7 @@ def build_blocks(info: Dict, now: datetime) -> List[Dict]:
         "type": "section",
         "text": {"type": "mrkdwn", "text": (
             f":rotating_light: *Hermes 보안 탐지 리포트* ({ts})\n"
-            f"`~/.hermes` 에 커밋되지 않은 변경사항 *{len(changes)}건* 이 있습니다.\n"
-            f"_{info['branch']} @ {info['head']}_"
+            f"`~/.hermes` 에 커밋되지 않은 변경사항 *{len(changes)}건* 이 있습니다."
         )},
     }, {"type": "divider"}]
 

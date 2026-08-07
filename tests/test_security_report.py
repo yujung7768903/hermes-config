@@ -73,8 +73,6 @@ def test_collect_and_build():
         info = sr.collect(sr.Path(repo))
         by_path = dict((p, c) for c, p in info["changes"])
 
-        assert info["branch"] == "main"
-        assert "init" in info["head"]
         assert by_path["edit.py"].strip() == "M"
         assert by_path["gone.py"].strip() == "D"
         assert by_path["fresh.py"] == "??"
