@@ -179,7 +179,7 @@ terminal 도구 없이도 파일이 삭제됨을 직접 확인했다.
   approvals.deny: rm 을 명령 토큰으로 잡는 패턴 11개 (경로·옵션별 옛 패턴 17개 대체)
     → 훅이 미실행·예외로 fail-open 되는 경우의 2차 방어선
 
-예외: ALLOWED_DELETE_PATHS (현재 ~/.hermes/skills/delete_test 만)
+예외: 없음 (전 경로 차단)
 
 적용 파일: /home/hermes/.hermes/hooks/security_guard.py, ~/.hermes/config.yaml
 검증: tests/test_rm_block.py (deny 패턴 + 훅 subprocess 실행, 27건)
@@ -440,8 +440,7 @@ terminal 도구 없이도 파일이 삭제됨을 직접 확인했다.
 | 8 | 응답 반환 | 결과를 채널로 전송 | - |
 
 ※ 3단계(모델 판단) 이전 개입 지점은 2.5단계(pre_gateway_dispatch)다.
-  지점은 존재하고 이미 hooks/message_trigger.py 가 그 훅으로 동작하지만,
-  트리거 문구 처리 용도이고 보안 차단 로직은 없다.
+  지점은 존재하지만 현재 등록된 훅이 없다.
   따라서 악의적 프롬프트가 모델에 도달하는 것 자체를 막는 레이어는 미구현이다.
   이 지점을 화이트리스트 게이트로 쓰는 계획은
   hermes-request-whitelist-plan.md 참조.
@@ -456,7 +455,7 @@ terminal 도구 없이도 파일이 삭제됨을 직접 확인했다.
 | 계층 | 계층명 | 구현 위치 | 적용 플랫폼 | 차단 방식 | yolo/mode=off 우회 | 구현 상태 |
 |------|--------|-----------|-------------|-----------|-------------------|-----------||
 | L0 | Platform Toolsets 화이트리스트 | config.yaml `platform_toolsets` + `toolsets.py` | 채널별 설정 | 채널에 등록되지 않은 toolset은 도구 자체가 노출되지 않음 | 우회 불가 (설정 레벨) | 설정됨. **원격 채널에는 실효 없음** — hermes-slack이 코어 툴 전체를 포함 |
-| LG | 요청 화이트리스트 게이트 | config.yaml `hooks.pre_gateway_dispatch` (현재 등록된 것은 message_trigger.py 뿐) | gateway 경유 채널. CLI·cron 통과 여부 미확인 | 모델 입력 직전 메시지를 검사해 `skip`(무시) 또는 `rewrite`(교체), 허용 시 통과 | hook이 dispatch를 막으면 모델 호출 자체가 없음 (미검증) | **미구현** — 지점만 존재. 계획: hermes-request-whitelist-plan.md |
+| LG | 요청 화이트리스트 게이트 | config.yaml `hooks.pre_gateway_dispatch` (현재 등록된 훅 없음) | gateway 경유 채널. CLI·cron 통과 여부 미확인 | 모델 입력 직전 메시지를 검사해 `skip`(무시) 또는 `rewrite`(교체), 허용 시 통과 | hook이 dispatch를 막으면 모델 호출 자체가 없음 (미검증) | **미구현** — 지점만 존재. 계획: hermes-request-whitelist-plan.md |
 | L1 | Approvals Deny | config.yaml `approvals.deny` | 전 플랫폼 | 패턴 매칭된 명령은 모델 판단과 무관하게 실행 거부 | 우회 불가 | 완료 |
 | L2 | pre_tool_call Hook | security_guard.py | 설정에 따라 전 플랫폼 또는 원격 한정 | 도구 호출 직전 인자를 검사해 차단 또는 허용 | hook이 deny 반환하면 실행 안 됨 | 완료 |
 | L3 | transform_tool_result | security-filter 플러그인 | 전 플랫폼 | 도구 결과에서 민감 정보 정규식 마스킹 | - | 완료 |
