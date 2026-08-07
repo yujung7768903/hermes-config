@@ -267,22 +267,91 @@ if tool_name == "patch":
             if is_protected_file(line.split(":", 1)[-1].strip()):
                 block(f"{PROTECTED_MSG}\n대상: {line.strip()}")
 
+# 대상 파일을 건드리는 쓰기 수단. 읽기 전용 명령(cat/grep/diff)은 통과한다.
+WRITE_INDICATORS = [
+    r">",                 # 리다이렉션 (>, >>)
+    r"\btee\b",
+    r"\bsed\b.*-i",
+    r"\bcp\b", r"\bmv\b", r"\bln\b", r"\binstall\b",
+    r"\btruncate\b", r"\bdd\b",
+    r"\bchmod\b", r"\bchown\b",
+    r"\bopen\s*\(", r"\bwrite\b",      # python 한 줄 실행
+    r"\bapply\b", r"\bcheckout\b", r"\brestore\b",  # git 경유 되돌리기
+]
+
+def has_write_indicator(command):
+    for pat in WRITE_INDICATORS:
+        if re.search(pat, command, re.IGNORECASE | re.DOTALL):
+            return True
+    return False
+
 if tool_name == "terminal":
     command = str(tool_input.get("command", ""))
-    if re.search(r"\bSOUL\.md\b", command, re.IGNORECASE):
-        # SOUL.md 를 건드리는 쓰기 수단. 읽기 전용 명령(cat/grep/diff)은 통과한다.
-        WRITE_INDICATORS = [
-            r">",                 # 리다이렉션 (>, >>)
-            r"\btee\b",
-            r"\bsed\b.*-i",
-            r"\bcp\b", r"\bmv\b", r"\bln\b", r"\binstall\b",
-            r"\btruncate\b", r"\bdd\b",
-            r"\bchmod\b", r"\bchown\b",
-            r"\bopen\s*\(", r"\bwrite\b",      # python 한 줄 실행
-            r"\bapply\b", r"\bcheckout\b", r"\brestore\b",  # git 경유 되돌리기
-        ]
-        for pat in WRITE_INDICATORS:
-            if re.search(pat, command, re.IGNORECASE | re.DOTALL):
-                block(f"{PROTECTED_MSG}\n차단된 명령: {command[:200]}")
+    if re.search(r"\bSOUL\.md\b", command, re.IGNORECASE) and has_write_indicator(command):
+        block(f"{PROTECTED_MSG}\n차단된 명령: {command[:200]}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# [규칙 5] 스케줄러 등록·변경 차단 (모든 플랫폼)
+# SOUL.md "하지 않는 일 — 배치 추가". LK(systemd ReadOnlyPaths) 는 cron/jobs.json 을
+# 동결할 수 없다 — 스케줄러가 next_run_at·last_run_at 을 상시 기록해야 하기 때문이다.
+# 그래서 파일 권한이 아니라 도구·명령 단계에서 막는다.
+#
+# 스크립트를 어디에 두든(~/.hermes/scripts 가 읽기전용이면 ~/work 로 우회) 실행되려면
+# 스케줄러에 등록돼야 하므로, 차단 지점은 스크립트 위치가 아니라 등록 행위다.
+# no_agent 스크립트 잡과 프롬프트 기반 에이전트 잡 모두 같은 등록 경로를 쓴다.
+#
+# 읽기는 허용한다 — `hermes cron list`, `cat cron/jobs.json` 은 통과한다.
+# 관리자가 ssh 로 직접 실행하는 등록은 훅 밖이라 영향받지 않는다.
+# ─────────────────────────────────────────────────────────────────────────────
+CRON_STORE = os.path.realpath(os.path.join(HOME, ".hermes", "cron", "jobs.json"))
+
+SCHEDULER_MSG = (
+    "[보안 정책] 배치(크론 잡) 등록·변경은 허용되지 않습니다.\n"
+    "스크립트를 다른 경로에 두고 등록하는 것도 같은 차단 대상입니다.\n"
+    "배치가 필요하면 관리자에게 요청하세요."
+)
+
+SCHEDULER_CMD_PATTERNS = [
+    # hermes 내장 크론. 변경 계열 서브커맨드만 잡는다 (list·show 는 통과)
+    (r"\bcron\b\s+(create|add|new|update|edit|set|enable|disable|delete|remove|rm)\b",
+     "hermes cron 잡 등록·변경"),
+    (r"\bcrontab\b",                       "시스템 crontab 등록·변경"),
+    (r"\bsystemd-run\b",                   "systemd 트랜지언트 타이머·서비스 등록"),
+    (r"\bsystemctl\b[^\n]*\.timer\b",      "systemd 타이머 조작"),
+    (r"\bat\s+(now\b|\d{1,2}:\d{2}\b|\d{1,2}\s*(am|pm)\b)", "at 예약 실행"),
+]
+SCHEDULER_CMD_COMPILED = [(re.compile(p, re.IGNORECASE), d) for p, d in SCHEDULER_CMD_PATTERNS]
+
+def is_cron_store(path_str):
+    if not path_str:
+        return False
+    try:
+        if os.path.isabs(path_str):
+            candidate = os.path.realpath(path_str)
+        else:
+            candidate = os.path.realpath(os.path.join(HOME, path_str))
+    except Exception:
+        return False
+    return candidate == CRON_STORE
+
+if tool_name == "terminal":
+    command = str(tool_input.get("command", ""))
+    for pat, desc in SCHEDULER_CMD_COMPILED:
+        if pat.search(command):
+            block(f"{SCHEDULER_MSG}\n사유: {desc}\n차단된 명령: {command[:200]}")
+    # 잡 저장소 직접 편집 (리다이렉션·tee·sed -i·인터프리터 경유)
+    if re.search(r"\bjobs\.json\b", command, re.IGNORECASE) and has_write_indicator(command):
+        block(f"{SCHEDULER_MSG}\n사유: cron/jobs.json 직접 편집\n차단된 명령: {command[:200]}")
+
+if tool_name == "write_file":
+    if is_cron_store(str(tool_input.get("path", ""))):
+        block(f"{SCHEDULER_MSG}\n사유: cron/jobs.json 직접 편집")
+
+if tool_name == "patch":
+    for line in str(tool_input.get("patch", "")).splitlines():
+        if line.startswith(("*** Update File:", "*** Create File:", "*** Delete File:")):
+            if is_cron_store(line.split(":", 1)[-1].strip()):
+                block(f"{SCHEDULER_MSG}\n사유: cron/jobs.json 직접 편집\n대상: {line.strip()}")
 
 sys.exit(0)

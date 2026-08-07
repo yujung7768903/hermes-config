@@ -265,6 +265,38 @@ approvals:
     - '*python*soul.md*'
     - '*node*soul.md*'
     - '*perl*soul.md*'
+
+    # ── 배치(크론 잡) 등록·변경 차단 ─────────────────────────────────────────
+    # LK 는 cron/jobs.json 을 동결할 수 없다 (스케줄러가 상시 기록).
+    # 1차 방어는 security_guard 훅 규칙 5, 이 목록은 훅 fail-open 대비 2차다.
+    # 조회(cron list·show)는 막지 않는다.
+    - '*cron create*'
+    - '*cron add*'
+    - '*cron new*'
+    - '*cron update*'
+    - '*cron edit*'
+    - '*cron set*'
+    - '*cron enable*'
+    - '*cron disable*'
+    - '*cron delete*'
+    - '*cron remove*'
+    - '*crontab*'
+    - '*systemd-run*'
+    # 유닛명(.timer)만 잡는다 — 조회인 `systemctl list-timers` 는 통과
+    - '*systemctl*.timer*'
+    # at 예약. 'at' 은 산문에도 흔한 단어라 명령 위치(줄 시작·파이프·세미콜론 뒤)로 한정
+    - 'at *'
+    - '*| at *'
+    - '*|at *'
+    - '*; at *'
+    - '*;at *'
+    # 잡 저장소 직접 편집
+    - '*>*jobs.json*'
+    - '*tee*jobs.json*'
+    - '*sed*-i*jobs.json*'
+    - '*cp*jobs.json*'
+    - '*mv*jobs.json*'
+    - '*python*jobs.json*'
 hooks_auto_accept: true
 hooks:
   pre_tool_call:
