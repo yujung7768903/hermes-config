@@ -4,6 +4,7 @@
 > 작성일: 2026-07-31
 > 최종 검증: 2026-08-06 (실제 파일 코드 기준으로 전면 재검증 — 미구현 항목 다수 완료 확인)
 > 개정: 2026-08-06 2차 (config.yaml·toolsets.py·security_guard.py·로그 대조. 아래 "0. 개정 요약" 참조)
+> 개정: 2026-08-07 (읽기 전용 전환 — terminal 툴셋 제거 + 쓰기 차단. 아래 "7. 읽기 전용 전환" 참조)
 
 ---
 
@@ -62,8 +63,10 @@ security_guard.py의 원격 판정은 두 경로에 의존한다.
   [완료 2026-08-06 3차] rm 차단을 전 플랫폼으로 이동 — is_remote() 의존 제거.
          patch Delete File 차단은 여전히 원격 한정이라 미발동 상태다.
   [높음] security_guard.py의 /home/ec2-user/private → /home/hermes/private
-  [높음] 원격 채널 toolset을 좁힐지, full access를 유지하고 hook으로만
-         통제할지 명시적으로 결정
+  [완료 2026-08-07] 원격 채널 toolset을 좁힐지, full access를 유지하고 hook으로만
+         통제할지 명시적으로 결정 → 둘 다 한다. 7절 참조.
+         terminal 툴셋은 config 로 제거하고, 툴셋 단위로 못 쪼개는 쓰기는
+         훅 규칙 5 로 막았다.
   [중간] approvals.deny의 죽은 패턴 3개 제거
   [중간] 'aws *' 패턴을 명령 시작 위치로 한정 (현재 히어독 문서 작성도 차단)
   [낮음] L1 차단도 감사 로그에 기록
@@ -606,3 +609,60 @@ agent.log 에서 실제 동작이 확인됐다.
 
 또한 config.yaml 에 `hooks_auto_accept: true` 가 설정돼 있다.
 이 문서에 기술되지 않았던 항목이다.
+
+---
+
+## 7. 읽기 전용 전환 [2026-08-07]
+
+### 7-1. 계기
+
+Slack 에서 "너는 뭘 할 수 있어?" 라는 질문에 Hermes 가 코딩·자동화·배치·크론
+등록·파일 수정을 할 수 있다고 답했다. 확인해 보니 과장이 아니라 사실이었다.
+`hermes-slack` 은 `_HERMES_CORE_TOOLS` 를 그대로 쓰고, 여기에 terminal·process·
+write_file·patch 가 모두 들어 있다 (0절 개정 요약과 동일한 사실).
+
+그때까지의 방어는 삭제·`~/private`·자격증명·SOUL.md 네 가지뿐이었고,
+"개발하지 않는다"는 제약은 SOUL.md 문장 하나가 전부였다 — 강제력이 없었다.
+
+### 7-2. 결정
+
+Hermes 를 **읽기 전용 분석가**로 확정한다. SOUL.md "하지 않는 일" 을
+프롬프트가 아니라 설정·훅으로 강제한다.
+
+| 계층 | 수단 | 없어지는 것 |
+| --- | --- | --- |
+| L1 config | `disabled_toolsets` 에 `terminal` 추가 | terminal·process — 셸 실행, 크론 등록, 백그라운드 프로세스, 리다이렉션 우회 |
+| L2 훅 | security_guard 규칙 5 | write_file·patch — 남은 쓰기 수단 전부 |
+
+`_HERMES_CORE_TOOLS` 를 직접 편집하는 안은 버렸다. hermes-agent 패키지 코드라
+업데이트하면 원복되고, hermes-config 저장소 밖이라 이력도 남지 않는다.
+
+`disabled_toolsets` 로 충분한 근거는 `model_tools.py:395-427` 이다 —
+disabled 는 enabled 와 무관하게 **맨 마지막에 무조건 차감**되고, core 보존
+예외는 `hermes-*` 번들과 posture 툴셋에만 적용된다. `terminal` 은 둘 다
+아니므로 `hermes-slack` 이 core 를 들고 와도 제거된다.
+
+### 7-3. 쓰기를 툴셋으로 못 뺀 이유
+
+`toolsets.py` 의 `file` 툴셋은 read_file·write_file·patch·search_files 가
+한 묶음이다. 통째로 빼면 코드·로그 읽기가 같이 죽어 분석 업무 자체가
+불가능해진다. 그래서 쓰기만 훅으로 처리했다.
+
+### 7-4. 남는 것과 남지 않는 것
+
+| | 상태 |
+| --- | --- |
+| 코드·로그 읽기 (read_file·search_files) | 유지 — 담당 업무 |
+| Slack·Teams 메시지 전송 | 유지 |
+| 셸 명령 (grep·tail·git log 포함) | 제거 — 조사도 read_file·search_files 로만 |
+| 파일 생성·수정 | 차단 |
+| 크론·배치 등록 | 차단 (cronjob 툴셋 + terminal 둘 다 없음) |
+| 외부 반출 (curl·wget) | 차단 — terminal 이 없어 수단 자체가 사라짐 |
+
+규칙 1~4(삭제·`~/private`·민감정보·SOUL.md)는 남겨 뒀다. terminal 을 다시
+켜는 날의 방어선이다.
+
+### 7-5. 검증
+
+`tests/test_readonly_agent.py` — L1 설정과 L2 훅을 함께 본다. 읽기 도구가
+통과하는지도 같이 확인한다 (막히면 분석 업무가 죽으므로).

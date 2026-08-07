@@ -25,6 +25,10 @@ agent:
     - session_search
     - skills
     - spotify
+    # terminal·process 제거 — 셸 실행·크론 등록·백그라운드 프로세스 차단.
+    # disabled_toolsets 는 enabled 와 무관하게 마지막에 차감되고(model_tools.py),
+    # terminal 은 hermes-* 번들도 posture 도 아니라 core 보존 예외가 없다.
+    - terminal
     - todo
     - tts
     - video

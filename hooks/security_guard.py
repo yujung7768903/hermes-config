@@ -7,6 +7,8 @@ Hermes Security Guard Hook - pre_tool_call
      - terminal 유무와 무관하게, 스킬 경유 포함 모든 도구에서 삭제 차단
   2. ~/private 디렉토리 접근 차단
   3. 민감 정보(인스턴스 ID, IP, AMI ID, IAM role, 토큰/키) 노출 차단
+  4. SOUL.md 자기수정 차단
+  5. 파일 쓰기(write_file·patch) 전면 차단 — 읽기 전용 분석가
 
 platform 감지 방법:
   - HERMES_SESSION_PLATFORM 환경변수 (gateway가 contextvars로 설정)
@@ -266,6 +268,31 @@ if tool_name == "patch":
         if line.startswith(("*** Update File:", "*** Create File:", "*** Delete File:")):
             if is_protected_file(line.split(":", 1)[-1].strip()):
                 block(f"{PROTECTED_MSG}\n대상: {line.strip()}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# [규칙 5] 파일 쓰기 전면 차단 (모든 플랫폼)
+# Hermes 는 읽기 전용 분석가다 — SOUL.md "하지 않는 일"(코드·설정·데이터 변경,
+# 개발, 스크립트·배치 추가)을 프롬프트가 아니라 훅으로 강제한다.
+#
+# 셸 경유 쓰기는 config.yaml disabled_toolsets 의 `terminal` 로 도구 자체를
+# 없앴다. 남은 쓰기 수단은 write_file·patch 둘뿐이라 여기서 막는다.
+# 툴셋 단위로 뺄 수 없는 이유: `file` 툴셋은 read_file·search_files 와 한 묶음
+# (toolsets.py 의 file = read_file·write_file·patch·search_files)이라
+# 통째로 빼면 분석 업무가 불가능해진다.
+#
+# 규칙 1~4 는 남겨 둔다 — terminal 을 다시 켜는 날의 방어선이다.
+# ─────────────────────────────────────────────────────────────────────────────
+READONLY_MSG = (
+    "[보안 정책] Hermes 는 파일을 생성·수정할 수 없습니다.\n"
+    "읽기·분석 전용입니다. 코드·설정 변경은 담당자가 직접 수행합니다."
+)
+
+if tool_name == "write_file":
+    block(f"{READONLY_MSG}\n대상: {str(tool_input.get('path', ''))[:200]}")
+
+if tool_name == "patch":
+    block(f"{READONLY_MSG}\n대상: {str(tool_input.get('patch', ''))[:200]}")
 
 if tool_name == "terminal":
     command = str(tool_input.get("command", ""))

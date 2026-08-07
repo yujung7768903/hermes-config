@@ -63,8 +63,11 @@ check("patch Update File: SOUL.md",
       guard_blocks("patch", {"patch": f"*** Update File: {SOUL}\n@@\n-a\n+b\n"}), True)
 check("patch Delete File: SOUL.md",
       guard_blocks("patch", {"patch": f"*** Delete File: {SOUL}\n"}), True)
-check("write_file 다른 파일은 통과",
-      guard_blocks("write_file", {"path": "/tmp/other.md"}), False)
+# 규칙 5(쓰기 전면 차단) 도입 후 SOUL.md 외의 파일도 차단된다.
+# 규칙 4 단독 동작은 test_readonly_agent.py 가 아니라 여기서 확인할 수 없으므로
+# 기대값만 갱신한다 — SOUL.md 보호는 위 4건으로 충분히 검증된다.
+check("write_file 다른 파일도 차단 (규칙 5)",
+      guard_blocks("write_file", {"path": "/tmp/other.md"}), True)
 
 print("\n── terminal 쓰기 수단 차단 ──")
 WRITE_CMDS = [
