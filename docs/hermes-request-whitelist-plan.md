@@ -29,9 +29,8 @@
 | 훅 등록 절차 | command + script_mtime 승인 필요 | shell-hooks-allowlist.json |
 
 반환 규약(`None` 통과 / `{"action":"skip"}` 무시 / `{"action":"rewrite","text":...}` 교체)과
-메시지 위치(`payload["extra"]["event"]["text"]`)는 원래 hooks/message_trigger.py 도입부를
-근거로 적어 뒀으나, 그 파일은 사용자가 등록하지 않은 트리거 훅이라 2026-08-07 에 제거했다.
-구현 착수 전에 Hermes 코어 문서로 두 항목을 다시 확인해야 함.
+메시지 위치(`payload["extra"]["event"]["text"]`)는 근거 자료가 없어 미확인 상태임.
+구현 착수 전에 Hermes 코어 문서로 두 항목을 확인해야 함.
 
 기존 문서 정정 대상 — hermes-security-policy.md 6-1 표의 "3단계(모델 판단) 이전에는 보안
 개입 지점이 없다"는 서술은 사실과 다름. 지점은 있고 비어 있었을 뿐임.

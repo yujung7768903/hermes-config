@@ -181,9 +181,6 @@ terminal 도구 없이도 파일이 삭제됨을 직접 확인했다.
 
 예외: 없음 (전 경로 차단)
 
-  [2026-08-07] 이전에는 ALLOWED_DELETE_PATHS 로 ~/.hermes/skills/delete_test 삭제가
-  허용돼 있었다. 사용자가 등록하지 않은 메시지 트리거를 위해 뚫린 예외라 제거했다.
-
 적용 파일: /home/hermes/.hermes/hooks/security_guard.py, ~/.hermes/config.yaml
 검증: tests/test_rm_block.py (deny 패턴 + 훅 subprocess 실행, 27건)
 
@@ -451,10 +448,6 @@ terminal 도구 없이도 파일이 삭제됨을 직접 확인했다.
   [2026-08-06 3차 정정] 이 표에는 원래 2.5단계가 없었고 "3단계 이전에는
   보안 개입 지점이 없다"고 적혀 있었다. 사실이 아니다 — 지점은 처음부터
   있었고 차단 로직만 비어 있었다.
-
-  [2026-08-07] 그 자리에 등록돼 있던 hooks/message_trigger.py 를 제거했다.
-  사용자가 요청하지 않은 메시지 트리거("반가워. 헤르메스야!", "아오 [이름]")를
-  실행하는 훅이었다. 현재 pre_gateway_dispatch 는 비어 있다.
 
 
 ### 6-2. 보안 계층 상세
