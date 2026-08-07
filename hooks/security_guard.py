@@ -250,4 +250,60 @@ if tool_name == "read_file":
                 f"차단된 경로: {path}"
             )
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# [규칙 4] SOUL.md 자기수정 차단 (모든 플랫폼)
+# 갱신 경로는 하나뿐이다 — 관리자가 로컬에서 수정해 git 에 올리고 pull 로 받는다.
+# 읽기는 허용한다. git pull 은 SOUL.md 를 명시하지 않으므로 걸리지 않는다.
+# 파일 권한으로는 막을 수 없다 — ~/.hermes 디렉터리 소유자가 hermes 이므로
+# 파일을 지우고 새로 만드는 경로로 우회된다. 도구 호출 자체를 막아야 한다.
+# ─────────────────────────────────────────────────────────────────────────────
+PROTECTED_FILES = [os.path.realpath(os.path.join(HOME, ".hermes", "SOUL.md"))]
+
+PROTECTED_MSG = (
+    "[보안 정책] SOUL.md 는 Hermes 가 수정할 수 없습니다.\n"
+    "갱신은 관리자가 로컬에서 수정해 git 에 올린 뒤 pull 로만 반영됩니다."
+)
+
+def is_protected_file(path_str):
+    if not path_str:
+        return False
+    try:
+        if os.path.isabs(path_str):
+            candidate = os.path.realpath(path_str)
+        else:
+            candidate = os.path.realpath(os.path.join(HOME, path_str))
+    except Exception:
+        return False
+    return candidate in PROTECTED_FILES
+
+if tool_name == "write_file":
+    target = str(tool_input.get("path", ""))
+    if is_protected_file(target):
+        block(f"{PROTECTED_MSG}\n대상: {target}")
+
+if tool_name == "patch":
+    for line in str(tool_input.get("patch", "")).splitlines():
+        if line.startswith(("*** Update File:", "*** Create File:", "*** Delete File:")):
+            if is_protected_file(line.split(":", 1)[-1].strip()):
+                block(f"{PROTECTED_MSG}\n대상: {line.strip()}")
+
+if tool_name == "terminal":
+    command = str(tool_input.get("command", ""))
+    if re.search(r"\bSOUL\.md\b", command, re.IGNORECASE):
+        # SOUL.md 를 건드리는 쓰기 수단. 읽기 전용 명령(cat/grep/diff)은 통과한다.
+        WRITE_INDICATORS = [
+            r">",                 # 리다이렉션 (>, >>)
+            r"\btee\b",
+            r"\bsed\b.*-i",
+            r"\bcp\b", r"\bmv\b", r"\bln\b", r"\binstall\b",
+            r"\btruncate\b", r"\bdd\b",
+            r"\bchmod\b", r"\bchown\b",
+            r"\bopen\s*\(", r"\bwrite\b",      # python 한 줄 실행
+            r"\bapply\b", r"\bcheckout\b", r"\brestore\b",  # git 경유 되돌리기
+        ]
+        for pat in WRITE_INDICATORS:
+            if re.search(pat, command, re.IGNORECASE | re.DOTALL):
+                block(f"{PROTECTED_MSG}\n차단된 명령: {command[:200]}")
+
 sys.exit(0)

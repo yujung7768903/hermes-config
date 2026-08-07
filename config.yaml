@@ -243,6 +243,28 @@ approvals:
     - '*`rm*'
     - '*"rm*'
     - "*\nrm*"
+
+    # ── SOUL.md 자기수정 차단 ───────────────────────────────────────────────
+    # 갱신 경로는 관리자 로컬 수정 → git push → pull 하나뿐이다.
+    # security_guard 훅(규칙 4)이 도구 호출을 막고, 이 목록은 훅이 fail-open
+    # 될 때의 2차 방어선이다. 읽기(cat·grep·diff)는 막지 않는다.
+    - '*>*soul.md*'
+    - '*tee*soul.md*'
+    - '*sed*-i*soul.md*'
+    - '*cp*soul.md*'
+    - '*mv*soul.md*'
+    - '*truncate*soul.md*'
+    - '*chmod*soul.md*'
+    - '*chown*soul.md*'
+    - '*checkout*soul.md*'
+    - '*restore*soul.md*'
+    - '*apply*soul.md*'
+    - '*ln *soul.md*'
+    # 인터프리터 경유 쓰기. 목록이 전부는 아니다 — 1차 방어는 훅(규칙 4)이고
+    # 훅은 쓰기 수단을 정규식으로 판정한다.
+    - '*python*soul.md*'
+    - '*node*soul.md*'
+    - '*perl*soul.md*'
 hooks_auto_accept: true
 hooks:
   pre_tool_call:
