@@ -76,6 +76,7 @@ def test_end_to_end_only_new_findings_are_sent():
 
         Path(repo, "a.py").write_text("x\n")
         Path(repo, ".gitignore").write_text("/logs/\n")   # 운영과 동일하게 상태파일 제외
+        Path(repo, "logs", "security").mkdir(parents=True)   # 운영처럼 이미 있는 상태에서 시작
         run("git", "init", "-q", "-b", "main")
         run("git", "config", "user.email", "t@t")
         run("git", "config", "user.name", "t")
@@ -83,10 +84,12 @@ def test_end_to_end_only_new_findings_are_sent():
         run("git", "commit", "-qm", "init")
 
         sent = []
-        orig_dir, orig_env, orig_state, orig_post = (
-            sw.sr.HERMES_DIR, sw.sr.ENV_FILE, sw.STATE_FILE, sw.post_to_slack)
+        orig_dir, orig_env, orig_state, orig_post, orig_base = (
+            sw.sr.HERMES_DIR, sw.sr.ENV_FILE, sw.STATE_FILE, sw.post_to_slack,
+            sw.sr.BASELINE_FILE)
         sw.sr.HERMES_DIR = Path(repo)
         sw.sr.ENV_FILE = Path(repo) / ".env"
+        sw.sr.BASELINE_FILE = Path(repo) / "logs" / "security" / ".known_ignored"
         sw.STATE_FILE = Path(repo) / "logs" / "security" / ".last_alert"
         sw.post_to_slack = lambda token, ch, blocks: sent.append(blocks) or True
         os.environ["SLACK_BOT_TOKEN"] = "xoxb-test"
@@ -116,9 +119,16 @@ def test_end_to_end_only_new_findings_are_sent():
             assert len(sent) == 3
 
             assert "10분 주기" in sent[0][0]["text"]["text"]
+            # 화이트리스트 밖 파일도 같은 경로로 잡힌다 — 이게 원래 구멍이었다
+            Path(repo, "test.txt").write_text("payload\n")
+            sw.main()                                        # 7) gitignore 로 숨은 파일
+            assert len(sent) == 4
+            rows = [b for b in sent[3] if b["type"] == "data_table"][0]["rows"]
+            assert any("test.txt" in str(r) for r in rows), rows
         finally:
             sw.sr.HERMES_DIR, sw.sr.ENV_FILE = orig_dir, orig_env
             sw.STATE_FILE, sw.post_to_slack = orig_state, orig_post
+            sw.sr.BASELINE_FILE = orig_base
 
 
 if __name__ == "__main__":

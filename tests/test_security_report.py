@@ -98,6 +98,50 @@ def test_build_blocks_clean():
         assert not any(b["type"] == "data_table" for b in blocks)
 
 
+def test_ignored_paths_baseline():
+    """`*` + 화이트리스트 gitignore 에서 숨은 파일을 기준선 대비 신규로 잡는다"""
+    with tempfile.TemporaryDirectory() as repo:
+        # 운영과 같은 형태 — 전부 무시하고 몇 개만 되살린다
+        with open(os.path.join(repo, ".gitignore"), "w") as f:
+            f.write("*\n!*/\n/logs/\n!.gitignore\n!scripts/*.py\n")
+        os.makedirs(os.path.join(repo, "scripts"))
+        os.makedirs(os.path.join(repo, "logs", "security"))
+        with open(os.path.join(repo, "scripts", "ok.py"), "w") as f:
+            f.write("a\n")
+        with open(os.path.join(repo, "legit.dat"), "w") as f:
+            f.write("a\n")            # 기준선에 흡수될 기존 파일
+        run(repo, "git", "init", "-q", "-b", "main")
+        run(repo, "git", "config", "user.email", "t@t")
+        run(repo, "git", "config", "user.name", "t")
+        run(repo, "git", "add", "-A")
+        run(repo, "git", "commit", "-qm", "init")
+
+        orig_dir, orig_base = sr.HERMES_DIR, sr.BASELINE_FILE
+        sr.HERMES_DIR = sr.Path(repo)
+        sr.BASELINE_FILE = sr.Path(repo) / "logs" / "security" / ".known_ignored"
+        try:
+            assert "legit.dat" in sr.scan_ignored(sr.Path(repo))
+
+            assert sr.new_ignored(sr.Path(repo)) == []      # 첫 실행은 기준선만 만든다
+            assert "legit.dat" in sr.read_baseline()
+
+            with open(os.path.join(repo, "test.txt"), "w") as f:
+                f.write("payload\n")
+            with open(os.path.join(repo, "scripts", "evil.sh"), "w") as f:
+                f.write("payload\n")   # .py 만 화이트리스트라 이것도 숨는다
+
+            assert sr.new_ignored(sr.Path(repo)) == ["scripts/evil.sh", "test.txt"]
+
+            changes = sr.collect(sr.Path(repo))["changes"]
+            assert ("!!", "test.txt") in changes
+            assert sr.status_label("!!") == "화이트리스트 밖 (신규)"
+
+            sr.write_baseline(sr.scan_ignored(sr.Path(repo)))   # 일일 리포트가 하는 일
+            assert sr.new_ignored(sr.Path(repo)) == []          # 흡수 후엔 조용해진다
+        finally:
+            sr.HERMES_DIR, sr.BASELINE_FILE = orig_dir, orig_base
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:
