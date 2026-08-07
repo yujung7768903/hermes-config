@@ -454,12 +454,34 @@ terminal 도구 없이도 파일이 삭제됨을 직접 확인했다.
 
 | 계층 | 계층명 | 구현 위치 | 적용 플랫폼 | 차단 방식 | yolo/mode=off 우회 | 구현 상태 |
 |------|--------|-----------|-------------|-----------|-------------------|-----------||
+| LK | 커널 하네스 동결 | systemd drop-in `10-readonly-harness.conf` (`ReadOnlyPaths=`) | 게이트웨이와 그 자식 프로세스 전부 | 하네스 경로가 읽기전용 바인드 마운트로 올라와 쓰기 자체가 EROFS | 우회 불가. 해제에 root 필요하고 `NoNewPrivileges=true` 로 하위에서 sudo 불가 | 완료 |
 | L0 | Platform Toolsets 화이트리스트 | config.yaml `platform_toolsets` + `toolsets.py` | 채널별 설정 | 채널에 등록되지 않은 toolset은 도구 자체가 노출되지 않음 | 우회 불가 (설정 레벨) | 설정됨. **원격 채널에는 실효 없음** — hermes-slack이 코어 툴 전체를 포함 |
 | LG | 요청 화이트리스트 게이트 | config.yaml `hooks.pre_gateway_dispatch` (현재 등록된 훅 없음) | gateway 경유 채널. CLI·cron 통과 여부 미확인 | 모델 입력 직전 메시지를 검사해 `skip`(무시) 또는 `rewrite`(교체), 허용 시 통과 | hook이 dispatch를 막으면 모델 호출 자체가 없음 (미검증) | **미구현** — 지점만 존재. 계획: hermes-request-whitelist-plan.md |
 | L1 | Approvals Deny | config.yaml `approvals.deny` | 전 플랫폼 | 패턴 매칭된 명령은 모델 판단과 무관하게 실행 거부 | 우회 불가 | 완료 |
 | L2 | pre_tool_call Hook | security_guard.py | 설정에 따라 전 플랫폼 또는 원격 한정 | 도구 호출 직전 인자를 검사해 차단 또는 허용 | hook이 deny 반환하면 실행 안 됨 | 완료 |
 | L3 | transform_tool_result | security-filter 플러그인 | 전 플랫폼 | 도구 결과에서 민감 정보 정규식 마스킹 | - | 완료 |
 
+L0~L3 은 전부 도구 호출 단위 판정이라, 패턴을 벗어나면 통과한다. LK 는 판정이 아니라
+파일시스템 자체를 읽기전용으로 만들므로 수단·경로와 무관하게 막힌다 — `write_file`,
+`patch`, `terminal` 의 리다이렉션·`tee`·`sed -i`·인터프리터 경유 쓰기가 한 번에 걸린다.
+L2 규칙 4(SOUL.md 자기수정 차단)와 L1 의 `*soul.md*` 패턴은 LK 가 포섭하지만, LK 는
+차단 사실을 `security_log` 에 남기지 않으므로 탐지·리포트 목적으로 유지한다.
+
+#### 6-2-1. LK — 동결 대상과 제외 대상
+
+| 구분 | 경로 | 근거 |
+|------|------|------|
+| 동결 | `config.yaml`, `SOUL.md`, `.env`, `hooks/`, `scripts/`, `plugins/`, `skills/`, `memories/`, `hermes-agent/`, `.git/` | 하네스 정의. 런타임 쓰기 없음 |
+| 제외 | `logs/`, `sessions/`, `cache/`, `cron/`, `pastes/` 및 최상위 런타임 파일 | 게이트웨이가 상시 기록 |
+
+`cron/jobs.json` 은 스케줄러가 `next_run_at`·`last_run_at` 을 계속 써야 해서 동결할 수
+없다. 크론 잡 등록 차단은 LK 로 해결되지 않는 잔여 항목이다.
+
+`config.yaml` 동결의 부작용 — `tools/approval.py` 의 영구 allowlist 저장이 EROFS 로
+실패한다. 에이전트가 승인 이력을 설정에 굳히지 못하게 하는 것이 목적이므로 의도된 동작이다.
+
+검증: `scripts/verify_harness_readonly.sh` 를 서버에서 실행한다. 실행 중인 게이트웨이의
+마운트 네임스페이스에 직접 들어가 확인하므로 설정이 아니라 실제 적용 상태를 본다.
 
 ### 6-3. L1 — Approvals Deny 차단 목록
 
