@@ -145,8 +145,7 @@ def build_blocks(info: Dict, now: datetime) -> List[Dict]:
         "type": "section",
         "text": {"type": "mrkdwn", "text": (
             f":rotating_light: *Hermes 보안 탐지 리포트* ({ts})\n"
-            f"`~/.hermes` 에 커밋되지 않은 변경사항 *{len(changes)}건* 이 있습니다. "
-            f"hermes 는 파일 수정 권한이 없으므로 확인이 필요합니다.\n"
+            f"`~/.hermes` 에 커밋되지 않은 변경사항 *{len(changes)}건* 이 있습니다.\n"
             f"_{info['branch']} @ {info['head']}_"
         )},
     }, {"type": "divider"}]
