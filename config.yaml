@@ -270,6 +270,3 @@ hooks:
   pre_tool_call:
     - command: python3 /home/hermes/.hermes/hooks/security_guard.py
       timeout: 10
-  pre_gateway_dispatch:
-    - command: python3 /home/hermes/.hermes/hooks/message_trigger.py
-      timeout: 10

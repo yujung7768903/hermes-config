@@ -70,24 +70,6 @@ def block(message):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# [예외 허용 경로] 아래 경로에 대한 삭제는 Slack/Teams에서도 허용
-# 원복 방법: security_guard.py.bak.YYYYMMDD_HHMMSS 파일로 덮어쓰기
-#   cp /home/hermes/.hermes/hooks/security_guard.py.bak.YYYYMMDD_HHMMSS \
-#      /home/hermes/.hermes/hooks/security_guard.py
-# ─────────────────────────────────────────────────────────────────────────────
-ALLOWED_DELETE_PATHS = [
-    "/home/hermes/.hermes/skills/delete_test",
-]
-
-def is_allowed_delete(command: str) -> bool:
-    """허용된 경로에 대한 삭제 명령인지 확인"""
-    for allowed in ALLOWED_DELETE_PATHS:
-        if allowed in command:
-            return True
-    return False
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 # [규칙 1] 파일 삭제 차단
 # terminal 삭제 명령은 전 플랫폼(CLI 포함) 차단.
 #   플랫폼 한정으로 두면 platform 감지 실패(HERMES_SESSION_PLATFORM 미전달,
@@ -109,9 +91,6 @@ if tool_name == "terminal":
     ]
     for pat in DELETE_PATTERNS:
         if re.search(pat, command, re.IGNORECASE | re.DOTALL):
-            # 허용된 경로에 대한 삭제는 예외 처리
-            if is_allowed_delete(command):
-                break
             block(
                 f"[보안 정책] 파일 삭제 명령은 허용되지 않습니다.\n"
                 f"차단된 명령: {command[:200]}\n"
