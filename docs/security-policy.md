@@ -56,6 +56,7 @@
 
 현재 적용 중:
 - 파일 삭제 명령(rm 계열) 전 플랫폼 차단 — CLI 포함. approvals.deny 와 이중 차단
+- SOUL.md 수정 차단 — 읽기만 허용. 갱신은 관리자 로컬 수정 → git push → pull 만
 - ~/private 디렉토리 접근 차단
 - EC2 메타데이터(169.254.169.254) 직접 접근 차단
 - AWS STS, IAM 조회 차단

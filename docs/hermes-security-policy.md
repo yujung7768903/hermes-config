@@ -511,6 +511,21 @@ terminal 도구 없이도 파일이 삭제됨을 직접 확인했다.
 | R3-15 | 전 플랫폼 | read_file | path가 `.aws/config` | 동일 |
 | R3-16 | 전 플랫폼 | read_file | path가 `/etc/hostname` | [보안 정책] 시스템 식별 정보 접근은 허용되지 않습니다. |
 | R3-17 | 전 플랫폼 | read_file | path가 `/etc/machine-id` | 동일 |
+| R4-1 | 전 플랫폼 | write_file | path가 `~/.hermes/SOUL.md` | [보안 정책] SOUL.md 는 Hermes 가 수정할 수 없습니다. |
+| R4-2 | 전 플랫폼 | patch | Update/Create/Delete File 대상이 `~/.hermes/SOUL.md` | 동일 |
+| R4-3 | 전 플랫폼 | terminal | `SOUL.md` 언급 + 쓰기 수단(`>`·`tee`·`sed -i`·`cp`·`mv`·`ln`·`truncate`·`dd`·`chmod`·`chown`·`open(`·`git checkout/restore/apply`) | 동일 |
+
+R4 는 읽기를 막지 않는다. `cat`·`grep`·`wc` 는 통과하고, `git pull` 은 SOUL.md 를
+명시하지 않으므로 걸리지 않는다 — 관리자 로컬 수정 → git push → pull 이 유일한
+갱신 경로라는 원칙이 그대로 성립한다.
+
+파일 권한(444·소유자 변경)으로는 막을 수 없다. `~/.hermes` 디렉터리 소유자가
+hermes 이므로 파일을 지우고 새로 만드는 경로로 우회된다. 도구 호출을 막는
+R4 와 L1 패턴이 실효 있는 수단이다.
+
+잔여 위험 — `git pull` 자체는 허용되므로, 원격 저장소에 쓰기 권한이 있는 주체가
+SOUL.md 를 바꾸면 그대로 반영된다. 즉 보호 경계는 "Hermes 의 로컬 수정"까지이고
+저장소 접근 통제는 GitHub 권한 문제다.
 
 
 ### 6-5. L3 — security-filter 마스킹 패턴 상세
