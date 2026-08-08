@@ -26,9 +26,9 @@ metadata:
 
 ```bash
 ~/.hermes/hermes-agent/venv/bin/python3 << 'PYEOF'
-import sys, time
+import os, sys, time
 from datetime import datetime, timezone
-sys.path.insert(0, '/home/ec2-user/.hermes/hermes-agent')
+sys.path.insert(0, os.path.expanduser('~/.hermes/hermes-agent'))
 from hermes_state import SessionDB
 
 db = SessionDB()
@@ -88,9 +88,9 @@ PYEOF
 
 ```bash
 ~/.hermes/hermes-agent/venv/bin/python3 << 'PYEOF'
-import sys, time
+import os, sys, time
 from datetime import datetime, timezone
-sys.path.insert(0, '/home/ec2-user/.hermes/hermes-agent')
+sys.path.insert(0, os.path.expanduser('~/.hermes/hermes-agent'))
 from hermes_state import SessionDB
 
 N = 5
@@ -132,9 +132,9 @@ PYEOF
 ```bash
 SESSION_ID="20260714_020513_7105b8"
 ~/.hermes/hermes-agent/venv/bin/python3 << PYEOF
-import sys, time
+import os, sys, time
 from datetime import datetime, timezone
-sys.path.insert(0, '/home/ec2-user/.hermes/hermes-agent')
+sys.path.insert(0, os.path.expanduser('~/.hermes/hermes-agent'))
 from hermes_state import SessionDB
 db = SessionDB()
 row = db._conn.execute("SELECT * FROM sessions WHERE id = ?", ("$SESSION_ID",)).fetchone()
@@ -149,8 +149,8 @@ PYEOF
 
 ```bash
 ~/.hermes/hermes-agent/venv/bin/python3 << 'PYEOF'
-import sys, time
-sys.path.insert(0, '/home/ec2-user/.hermes/hermes-agent')
+import os, sys, time
+sys.path.insert(0, os.path.expanduser('~/.hermes/hermes-agent'))
 from hermes_state import SessionDB
 
 today_start = time.mktime(time.strptime(time.strftime('%Y-%m-%d'), '%Y-%m-%d'))
