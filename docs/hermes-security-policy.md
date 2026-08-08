@@ -57,6 +57,35 @@ security_guard.py의 원격 판정은 두 경로에 의존한다.
   파일 삭제 방어가 없는 것이다. 이 테스트 전에는 실사용으로 열면 안 된다.
 
 
+### 0-3. 게이트웨이 2개 동시 구동 [2026-08-09 추가]
+
+이 문서의 방어 기술은 전부 **hermes 계정 인스턴스 기준**이다.
+같은 서버에 ec2-user 계정 인스턴스가 **동시에 살아 있다**.
+
+  hermes   인스턴스 : PID 1949,  ~/.hermes/config.yaml,
+                      approvals.deny 33개, security_log.py 있음,
+                      security-filter(L3) 활성
+  ec2-user 인스턴스 : PID 47998, ~/.hermes/config.yaml,
+                      approvals.deny 17개, security_log.py 없음,
+                      L3 마스킹 없음 (plugins.enabled = deploy-log, teams-platform)
+
+/home/ec2-user/.hermes-migrated 가 /home/hermes/.hermes 를 가리키는 심볼릭
+링크로 남아 있다. 이관을 시도한 흔적이지만 ec2-user 쪽 .hermes 실체는 그대로
+있고, 게이트웨이도 그 실체를 쓰고 있다. **이관이 끝나지 않았다.**
+
+격리 디렉터리(private/ · hermes-workspace/ · hermes-readonly/)도 ec2-user
+홈에만 있고 hermes 홈에는 없다.
+
+**먼저 확인할 것**: 두 인스턴스가 같은 Slack/Teams 워크스페이스에 붙어 있는가.
+붙어 있다면 같은 메시지에 두 번 응답하거나, **약한 쪽(ec2-user)이 강한 쪽의
+차단을 우회하는 경로**가 된다. 양쪽 .env 의 Slack 앱 토큰을 대조하면 된다.
+
+강한 쪽을 아무리 조여도 약한 쪽이 열려 있으면 정책의 정본이 어느 쪽인지
+정해지지 않고, 나머지 결정이 전부 무의미해진다. ec2-user 인스턴스 정리가
+다른 모든 항목보다 앞선다.
+
+---
+
 ### 0-2. 수정이 필요한 항목
 
   [완료 2026-08-06 3차] rm 차단을 전 플랫폼으로 이동 — is_remote() 의존 제거.
@@ -214,6 +243,10 @@ terminal 도구 없이도 파일이 삭제됨을 직접 확인했다.
   read_file / write_file / search_files / patch 는 realpath 기반 비교라
   정상 동작한다. security_guard.py 의 PRIVATE_PATTERNS 를 수정해야 한다.
 
+  [2026-08-09 정정] 수정 완료. PRIVATE_PATTERNS 는 이제 계정을 하드코딩하지 않고
+  rf"{re.escape(HOME)}/private\b" 를 쓴다 (security_guard.py 규칙 2).
+  계정이 바뀌어도 따라간다. 위 "오류" 항목은 해소된 상태다.
+
 접근 거부 메시지 예시:
   [보안 정책] 접근 금지 디렉토리입니다.
   접근이 필요하다면 ~/hermes-workspace/ 로 복사 후 이용하세요.
@@ -252,9 +285,31 @@ terminal 도구 없이도 파일이 삭제됨을 직접 확인했다.
     '*\n\n      pkill'
     '\n\n      killall *'
 
+  [2026-08-09 정정] 셋 다 죽은 게 아니라 2개다. fnmatch 는 * 가 개행에도
+  매칭되므로 '*\nkill *' 은 `cd /tmp\nkill 1234` 를 정상적으로 잡는다.
+  실제로 무력한 것은 비대칭인 둘이다.
+    '*\npkill'      뒤에 * 가 없어 `a\npkill -9` 미차단
+    '\nkillall *'   앞에 * 가 없어 `a\nkillall x` 미차단
+  개행 패턴이 필요한 이유는 '* kill *' 이 개행 뒤 형태를 못 잡기 때문이다
+  (개행 앞에 공백이 없다).
+
+  수정 완료. rm 그룹과 같은 "\n" 표기로 통일했다. 같은 점검에서 명령 끝에
+  오는 형태('… | xargs pkill')가 전부 통과하던 것도 발견해 '* kill' ·
+  '* pkill' · '* killall' 을 추가했다 — rm 그룹의 '* rm' 과 같은 이유다.
+  회귀 방지: tests/test_kill_block.py
+
   'aws *' / '* aws *' 는 명령 문자열 어디에나 매칭된다. AWS CLI 호출이
   아닌 명령도 차단한다. agent.log에 히어독으로 문서를 쓰는 명령이
   '* aws *' 로 차단된 사례가 있다. 명령 시작 위치로 한정해야 한다.
+
+  [2026-08-09 정정] 수정 완료. fnmatch 로는 명령 경계를 표현할 수 없으므로
+  '* aws *' 를 deny 에서 빼고, 판정을 L2 로 옮겼다. security_guard 규칙 3 에
+  줄 시작 · ; · | · & · ( · 백틱 · 개행 뒤의 aws 를 잡는 정규식을 넣었고
+  sudo·env·VAR= 프리픽스도 포함한다. deny 에 남은 'aws *' 는 훅이 fail-open
+  될 때의 2차 방어선이다.
+  남는 오탐: 히어독 본문에서 줄이 "aws " 로 시작하는 경우. 개행 뒤를 안 보면
+  `cmd1\naws s3 ls` 가 통과하므로 이쪽을 택했다.
+  회귀 방지: tests/test_aws_block.py
 
 계층 B — security_guard.py hook (pre_tool_call)
   terminal 도구 차단:
