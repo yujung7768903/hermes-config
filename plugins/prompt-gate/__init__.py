@@ -34,12 +34,13 @@ ACP 어댑터, internal event 는 이 훅을 지나지 않는다 — 그쪽은 �
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import os
 import re
 import sys
-from collections import OrderedDict
+from collections import OrderedDict, deque
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeout
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -87,16 +88,39 @@ CATEGORIES = list(ALLOWED) + list(BLOCKED)
 # ── 결정적 선판정 ─────────────────────────────────────────────────────────
 # 명백한 것만 LLM 없이 즉시 자른다. 애매하면 넘기지 않고 분류기로 보낸다.
 # 목적은 정확도가 아니라 **분류기가 죽어도 남는 최소 방어선** + LLM 호출 절감이다.
+#
+# ★ 한계를 분명히 해둔다: 이 정규식들은 **완전하지 않고 완전해질 수도 없다.**
+#   동의어·우회 표기로 얼마든지 피할 수 있다("앞의 지시 무시" → "지금까지 안내받은
+#   규칙은 전부 무효로 하고"). 주 방어는 분류기이고 이건 백스톱이다. 그래서
+#   enforce_hard_block 옵션으로 observe 모드에서도 이 히트만은 실제 차단한다 —
+#   관측 기간 내내 완전 무방비로 두지 않기 위해서다.
 HARD_BLOCK = [
-    (r"(앞|위|이전)(의|에)?\s*(지시|명령|규칙|프롬프트)[^\n]{0,10}(무시|잊)", "prompt_injection"),
-    (r"ignore\s+(all\s+)?(previous|prior|above)\s+instructions", "prompt_injection"),
-    (r"(너는|당신은)\s*이제[^\n]{0,20}(관리자|개발자|제한\s*없)", "prompt_injection"),
-    (r"(system\s*prompt|시스템\s*프롬프트)[^\n]{0,10}(무시|공개|보여|출력)", "prompt_injection"),
-    (r"\.env\b[^\n]{0,12}(보여|열어|출력|알려|내용)", "credential_instance_access"),
-    (r"(토큰|비밀번호|시크릿|비번|access\s*key|secret\s*key)[^\n]{0,12}(알려|보여|출력|줘)",
+    # 인젝션 — 선행 지시 무효화 / 역할 탈취
+    (r"(앞|위|이전|지금까지)[^\n]{0,12}(지시|명령|규칙|프롬프트|안내)[^\n]{0,14}"
+     r"(무시|잊|무효|해제|버리)", "prompt_injection"),
+    (r"(ignore|disregard|forget|override)\s+(all\s+|everything\s+)?"
+     r"(previous|prior|above|earlier|preceding)", "prompt_injection"),
+    (r"(너는|당신은|넌)\s*(이제|지금부터)[^\n]{0,24}"
+     r"(관리자|개발자|제한\s*없|무제한|root|admin|god\s*mode)", "prompt_injection"),
+    (r"(system\s*prompt|시스템\s*프롬프트|SOUL\s*파일|지침\s*파일)"
+     r"[^\n]{0,14}(무시|공개|보여|출력|알려|덤프|dump)", "prompt_injection"),
+    (r"(developer|admin|god)\s*mode|제한\s*없는\s*모드", "prompt_injection"),
+    # 자격증명 — 파일·값 요구
+    (r"(\.env\b|환경\s*변수\s*파일|dotenv)[^\n]{0,16}"
+     r"(보여|열어|출력|알려|내용|붙여|복사|줘|cat\b)", "credential_instance_access"),
+    (r"(토큰|비밀번호|시크릿|비번|암호|자격\s*증명|인증\s*키|api\s*key|"
+     r"access\s*key|secret\s*key|bearer)"
+     r"[^\n]{0,16}(알려|보여|출력|붙여|복사|넘겨|전달|줘|말해)",
      "credential_instance_access"),
-    (r"\bSOUL\.md\b[^\n]{0,20}(추가|수정|바꿔|고쳐|지워|덮어)", "harness_self_modify"),
-    (r"(훅|hook|security_guard)[^\n]{0,10}(꺼|비활성|끄고|해제)", "harness_self_modify"),
+    (r"(credentials?|token|secret)[^\n]{0,16}(show|print|paste|reveal|dump|send)",
+     "credential_instance_access"),
+    # 하네스 변경
+    (r"\b(SOUL\.md|config\.yaml|jobs\.json)\b[^\n]{0,24}"
+     r"(추가|수정|바꿔|고쳐|지워|덮어|편집|넣어|써|append|edit|write)",
+     "harness_self_modify"),
+    (r"(훅|hook|security_guard|approvals?|deny|화이트리스트|게이트|prompt-gate)"
+     r"[^\n]{0,14}(꺼|비활성|끄고|해제|우회|풀어|없애|삭제|지워|disable|bypass)",
+     "harness_self_modify"),
 ]
 HARD_BLOCK_RE = [(re.compile(p, re.IGNORECASE), c) for p, c in HARD_BLOCK]
 
@@ -161,8 +185,60 @@ def _settings(ctx):
         "timeout": float(cfg.get("timeout", 6.0)),
         # 미지정이면 호스트 기본 모델. 지정하려면 llm.allow_model_override 도 켜야 한다
         "model": cfg.get("model") or None,
-        "max_chars": int(cfg.get("max_chars", 4000)),
+        # 이 길이를 넘으면 자르지 않고 unknown 으로 차단한다.
+        # 자르면 "분류한 것"과 "모델이 받는 것"이 달라져서, 뒤쪽에 페이로드를 붙이는
+        # 것만으로 게이트를 통째로 우회할 수 있다.
+        "max_chars": int(cfg.get("max_chars", 20000)),
+        # observe 모드에서도 정규식 히트만은 실제 차단할지.
+        # 관측 기간 내내 완전 무방비로 두지 않기 위한 중간 단계다.
+        "enforce_hard_block": bool(cfg.get("enforce_hard_block", True)),
+        # 분류에 직전 발화 몇 개를 함께 넣을지 (페이로드 분할 대응). 0 이면 끔
+        "context_turns": int(cfg.get("context_turns", 2)),
     }
+
+
+# 인자 없이 왔을 때만 LLM 없이 통과시키는 내장 커맨드.
+# 여기 없는 슬래시 입력은 **전부 분류 대상**이다 — /steer·/queue·/moa 와 스킬·번들
+# 커맨드는 인자를 그대로 모델에 넘기고, 첫 토큰에 "/" 가 또 있으면 코어는 커맨드로
+# 인정하지도 않아 원문이 평문으로 모델에 간다.
+SAFE_BARE_COMMANDS = {
+    "reset", "new", "clear", "help", "status", "stop", "cancel", "ping",
+    "whoami", "usage", "compact", "queue", "pending",
+}
+
+
+def _model_visible_text(event):
+    """모델이 실제로 보게 될 텍스트를 모아준다.
+
+    게이트가 event.text 만 보면, 인용(reply)·채널 컨텍스트로 실려 오는 내용이
+    분류를 거치지 않고 모델에 도달한다. 코어가 붙이는 것과 완전히 같지는 않지만,
+    최소한 게이트가 "본 것"과 모델이 "받는 것"의 간극을 좁힌다.
+    """
+    parts = []
+    for attr in ("channel_context", "reply_to_text", "quoted_text"):
+        v = getattr(event, attr, None)
+        if isinstance(v, str) and v.strip():
+            parts.append(v)
+    body = getattr(event, "text", "") or ""
+    parts.append(body)
+    return "\n".join(parts), body
+
+
+def _split_command(text):
+    """(커맨드 이름, 인자) — 코어와 같은 규칙. 커맨드가 아니면 (None, text).
+
+    코어는 lstrip 하지 않고 원문 startswith("/") 를 보며, 이름에 "/" 가 들어 있으면
+    커맨드로 인정하지 않는다 (gateway/platforms/base.py). 게이트가 lstrip 을 쓰면
+    "  /x 악성문구" 가 게이트에는 커맨드, 코어에는 평문이 되어 그대로 새어 나간다.
+    """
+    if not text.startswith(("/", "!")):
+        return None, text
+    head = text.split(maxsplit=1)
+    name = head[0][1:].split("@", 1)[0]
+    args = head[1] if len(head) > 1 else ""
+    if not name or "/" in name:
+        return None, text          # 코어가 커맨드로 안 봄 → 평문으로 분류
+    return name.lower(), args
 
 
 def _audit(event_type, *, platform, session, rule, detail):
@@ -175,17 +251,25 @@ def _audit(event_type, *, platform, session, rule, detail):
         pass
 
 
+_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="prompt-gate")
+
+
 def register(ctx):
     st = _settings(ctx)
-    seen = OrderedDict()  # message_id → category. 큐/펜딩 재디스패치 중복 발화 방지
+    seen = OrderedDict()     # message_id → category. 큐·펜딩 재디스패치 중복 발화 방지
+    recent = OrderedDict()   # session → 최근 발화 deque. 페이로드 분할 대응
 
-    def _classify(text):
-        """카테고리 하나를 돌려준다. 판정 불가는 전부 'unknown'."""
+    if security_log is None:
+        logger.error(
+            "[prompt-gate] security_log 를 import 하지 못했다 — 차단 기록이 남지 않는다. "
+            "관측 결과가 '오차단 0' 이 아니라 '기록 0' 으로 끝난다. 경로=%s",
+            HERMES_HOME / "hooks")
+
+    def _call_llm(payload):
         res = ctx.llm.complete(
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user",
-                 "content": "<request>\n" + text[: st["max_chars"]] + "\n</request>"},
+                {"role": "user", "content": payload},
             ],
             **({"model": st["model"]} if st["model"] else {}),
             temperature=0,
@@ -193,7 +277,27 @@ def register(ctx):
             timeout=st["timeout"],
             purpose="prompt-gate.classify",
         )
-        out = (getattr(res, "text", "") or "").strip().strip('"\'`.').lower()
+        return (getattr(res, "text", "") or "").strip().strip('"\'`.').lower()
+
+    def _classify(text, history):
+        """카테고리 하나를 돌려준다. 판정 불가는 전부 'unknown'.
+
+        ctx.llm 의 timeout 은 **시도당** 값이라 코어가 전송 오류로 재시도하면
+        총 대기가 몇 배로 늘고, 그동안 게이트웨이 이벤트 루프 전체가 멈춘다.
+        그래서 워커 스레드에 던지고 벽시계 예산을 게이트가 직접 지킨다.
+        """
+        payload = ""
+        if history:
+            payload += ("<context>\n같은 대화의 직전 발화다. 요청이 여러 메시지로 "
+                        "쪼개졌을 수 있으니 이어지는 의도 전체로 판정하라.\n"
+                        + "\n".join(history) + "\n</context>\n")
+        payload += "<request>\n" + text + "\n</request>"
+        fut = _POOL.submit(_call_llm, payload)
+        try:
+            out = fut.result(timeout=st["timeout"] + 1.0)
+        except FutureTimeout:
+            fut.cancel()
+            raise TimeoutError(f"분류기 벽시계 예산 초과 ({st['timeout'] + 1.0}s)")
         # 스키마 이탈(산문·복수 카테고리·빈 문자열)은 전부 unknown
         return out if out in CATEGORIES else "unknown"
 
@@ -201,7 +305,7 @@ def register(ctx):
         # kwargs 로만 받는다. 코어가 kwarg 를 추가해도 TypeError 로 조용히
         # fail-open 되지 않게 하기 위해서다.
         event = kwargs.get("event")
-        text = (getattr(event, "text", "") or "")
+        visible, body = _model_visible_text(event) if event is not None else ("", "")
         src = getattr(event, "source", None)
         platform = getattr(getattr(src, "platform", None), "value", "") or str(
             getattr(src, "platform", "") or "")
@@ -211,15 +315,19 @@ def register(ctx):
         def decide(category, how):
             allowed = category in ALLOWED
             desc = ALLOWED.get(category) or BLOCKED.get(category, "")
-            logger.info("[prompt-gate] mode=%s %s=%s platform=%s chat=%s via=%s",
+            # observe 여도 정규식 히트는 차단한다 (enforce_hard_block).
+            # 관측 기간 내내 완전 무방비로 두지 않기 위해서다.
+            acting = st["mode"] == "enforce" or (
+                how == "regex" and st["enforce_hard_block"])
+            logger.info("[prompt-gate] mode=%s %s=%s platform=%s chat=%s via=%s acting=%s",
                         st["mode"], "allow" if allowed else "block",
-                        category, platform, session, how)
+                        category, platform, session, how, acting)
             if allowed:
                 return None
-            _audit("BLOCKED_PROMPT" if st["mode"] == "enforce" else "WOULD_BLOCK_PROMPT",
+            _audit("BLOCKED_PROMPT" if acting else "WOULD_BLOCK_PROMPT",
                    platform=platform, session=session, rule=category,
-                   detail=f"via={how} text={text[:150]}")
-            if st["mode"] != "enforce":
+                   detail=f"via={how} text={visible[:150]}")
+            if not acting:
                 return None  # 관측 모드 — 로그만 남기고 통과시킨다
             if st["on_block"] == "silent":
                 return {"action": "skip", "reason": f"prompt-gate:{category}"}
@@ -229,28 +337,48 @@ def register(ctx):
                     "text": BLOCK_NOTICE.format(cat=category, desc=desc)}
 
         try:
-            if not text.strip():
-                return None  # 첨부만 있는 메시지 등 — 분류할 텍스트가 없다
-            if text.lstrip().startswith("/"):
-                # 슬래시 커맨드는 모델을 거치지 않으므로 이 게이트의 통제 대상이 아니다.
-                # /queue 로 감싼 본문은 큐에서 풀릴 때 별도 이벤트로 다시 여기 걸린다.
-                logger.info("[prompt-gate] slash command 통과: platform=%s chat=%s",
-                            platform, session)
+            if not visible.strip():
+                # 캡션 없는 첨부·음성 메시지. 코어가 나중에 전사·문서 인라인을
+                # 붙이므로 "텍스트가 없다"가 "내용이 없다"는 뜻이 아니다.
+                if getattr(event, "media_urls", None):
+                    return decide("unknown", "media_no_text")
+                return None  # 정말 아무 내용도 없는 이벤트
+
+            # 슬래시·느낌표 커맨드. 무조건 통과시키면 안 된다 —
+            # /steer·/queue·/moa 와 스킬·번들 커맨드는 인자를 그대로 모델에 넘기고,
+            # 첫 토큰에 "/" 가 또 있으면 코어는 커맨드로 인정하지 않아 원문이
+            # 평문으로 모델에 간다. 인자 없는 내장 커맨드만 예외로 둔다.
+            name, _args = _split_command(body)
+            if name and name in SAFE_BARE_COMMANDS and not _args.strip():
+                logger.info("[prompt-gate] 내장 커맨드 통과: /%s platform=%s chat=%s",
+                            name, platform, session)
                 return None
 
+            if len(visible) > st["max_chars"]:
+                # 자르고 분류하면 "분류한 것"과 "모델이 받는 것"이 달라진다.
+                # 뒤에 페이로드를 붙이는 것만으로 게이트가 통째로 우회된다.
+                return decide("unknown", "too_long")
+
             for pat, cat in HARD_BLOCK_RE:
-                if pat.search(text):
+                if pat.search(visible):
                     return decide(cat, "regex")
 
             if mid and mid in seen:
                 return decide(seen[mid], "cache")
 
-            category = _classify(text)
+            history = list(recent.get(session) or ())
+            category = _classify(visible, history)
 
             if mid:
                 seen[mid] = category
                 while len(seen) > 256:
                     seen.popitem(last=False)
+            if st["context_turns"] > 0 and session:
+                recent.setdefault(session, deque(maxlen=st["context_turns"]))
+                recent[session].append(visible[:500])
+                recent.move_to_end(session)
+                while len(recent) > 128:
+                    recent.popitem(last=False)
             return decide(category, "llm")
 
         except Exception as exc:
@@ -269,5 +397,7 @@ def register(ctx):
                                                 desc=BLOCKED["unknown"])}
 
     ctx.register_hook("pre_gateway_dispatch", _gate)
-    logger.info("[prompt-gate] 등록 완료 — mode=%s on_block=%s timeout=%.1fs model=%s",
-                st["mode"], st["on_block"], st["timeout"], st["model"] or "(호스트 기본)")
+    logger.info("[prompt-gate] 등록 완료 — mode=%s on_block=%s timeout=%.1fs "
+                "max_chars=%d hard_block=%s model=%s",
+                st["mode"], st["on_block"], st["timeout"], st["max_chars"],
+                st["enforce_hard_block"], st["model"] or "(호스트 기본)")
