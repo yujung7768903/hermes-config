@@ -1,0 +1,7 @@
+name: security-filter
+version: 0.1.0
+description: L3 — 도구 결과가 모델에 전달되기 직전 민감정보 23종을 마스킹한다.
+author: platform
+kind: standalone
+provides_hooks:
+  - transform_tool_result
