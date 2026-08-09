@@ -190,10 +190,38 @@ plugins:
     - deploy-log
     - teams-platform
     - security-filter
+    - prompt-gate
   disabled: []
   entries:
     deploy-log:
       allow_tool_override: false
+
+    # ── LG 계층 — 모델 도달 전 요청 화이트리스트 게이트 ──────────────────
+    # 수행 가능한 업무 카테고리로 분류되는 요청만 통과시킨다.
+    # 이 블록은 LK(systemd ReadOnlyPaths)로 동결돼 있어 에이전트가 못 바꾼다.
+    prompt-gate:
+      # observe : 분류만 하고 전부 통과. 감사 로그에 WOULD_BLOCK_PROMPT 로 기록
+      # enforce : 미허용 카테고리를 실제로 차단
+      # 실사용 문구를 1~2주 관측해 오차단 0 을 확인한 뒤 enforce 로 바꾼다.
+      mode: observe
+
+      # notify : 원문을 버리고 안내 문구로 교체 (사용자가 차단 사유를 안다)
+      # silent : 드롭. 사용자에게 아무 응답도 가지 않는다
+      on_block: notify
+
+      # 이 콜백은 게이트웨이 이벤트 루프에서 동기 실행된다 — 이 시간만큼
+      # 모든 플랫폼·모든 세션이 멈출 수 있다. 크게 잡지 말 것.
+      timeout: 6.0
+      max_chars: 4000
+
+      # model 미지정 = 호스트 기본 모델(sonnet-4-6). 더 싼 모델로 바꾸려면
+      # allow_model_override 를 켜고 model 에 해당 리전에서 실제로 쓸 수 있는
+      # ID 를 적는다. 주의: ctx.llm 이 타는 aux 경로는 위 bedrock.region 을
+      # 읽지 않고 AWS_REGION → AWS_DEFAULT_REGION → ~/.aws/config → us-east-1
+      # 순으로 리전을 정한다.
+      # model: global.anthropic.claude-haiku-4-5
+      llm:
+        allow_model_override: false
 approvals:
   deny:
     # ── 프로세스 종료 차단 ──────────────────────────────────────────────
