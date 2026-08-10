@@ -190,6 +190,7 @@ plugins:
     - deploy-log
     - teams-platform
     - security-filter
+    - slack-table
     - prompt-gate
   disabled: []
   entries:
