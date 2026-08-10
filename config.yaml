@@ -241,8 +241,14 @@ plugins:
       # 접근 제어이기 때문이다. 비어 있으면 아무도 통과하지 못한다.
       # 값은 플러그인이 이벤트에서 찾은 식별자(user_id·chat_id 등) 중 하나와
       # 일치하면 된다. 실제로 어떤 값이 오는지는 차단 로그의 ids= 에 남는다.
+      # [2026-08-10] D0BGQGRBM51 → U0BGUPUBX2A. 기존 값은 어떤 이벤트와도
+      # 매칭되지 않아 관리자 전용 2종이 전원 차단이었다(로그 전 건 admin=False,
+      # /restart 포함). 실제로 실려 오는 값은 user=U0BGUPUBX2A,
+      # DM=D0BGFMB9KM5, 채널=C0BGUPUJFAS·C0BPH28DLDN 이다.
+      # 채널·DM ID 가 아니라 사용자 ID 를 쓴다 — 채널 ID 를 넣으면 그 채널에
+      # 글을 쓰는 다른 사람까지 관리자가 된다.
       admins:
-        - D0BGQGRBM51
+        - U0BGUPUBX2A
 
       # model 미지정 = 호스트 기본 모델(sonnet-4-6). 더 싼 모델로 바꾸려면
       # allow_model_override 를 켜고 model 에 해당 리전에서 실제로 쓸 수 있는
