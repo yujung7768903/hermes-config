@@ -303,12 +303,56 @@ SAFE_BARE_COMMANDS = {
 }
 
 
-def _model_visible_text(event):
-    """모델이 실제로 보게 될 텍스트를 모아준다.
+# 코어 슬랙 어댑터가 event.text **앞에** 붙이는 스레드 히스토리 블록.
+#
+#   [Thread context — prior messages in this thread (not yet in conversation history):]
+#   <이름>: <메시지>
+#   ...
+#   [End of thread context]
+#
+#   <사용자가 이번에 실제로 친 문장>
+#
+# plugins/platforms/slack/adapter.py 의 `text = thread_context + text` 다.
+# **세션이 없는 첫 진입**일 때만 붙는데, 이 훅의 skip 은 세션 생성 전에 반환되므로
+# 차단할 때마다 "세션 없음"이 유지되고 다음 메시지에 또 붙는다. 그래서 DB 질문을
+# 한 번 차단하면 그 문장이 이후 모든 메시지의 event.text 안에 계속 실려 오고,
+# 무슨 말을 쳐도 같은 판정이 반복된다 (2026-08-10 17:38~17:40 실사례).
+# → 게이트는 이 블록을 사용자 발화로 취급하지 않는다. 아래 _own_text 가 떼어낸다.
+_THREAD_CTX_HEAD = "[Thread context"
+_THREAD_CTX_END = "[End of thread context]"
 
-    게이트가 event.text 만 보면, 인용(reply)·채널 컨텍스트로 실려 오는 내용이
-    분류를 거치지 않고 모델에 도달한다. 코어가 붙이는 것과 완전히 같지는 않지만,
-    최소한 게이트가 "본 것"과 모델이 "받는 것"의 간극을 좁힌다.
+
+def _own_text(body):
+    """body 에서 코어가 붙인 스레드 컨텍스트 접두부를 떼고 이번 턴 발화만 남긴다.
+
+    **첫 번째** 종결 표식을 기준으로 자른다. 실제 접두부의 종결 표식은 항상 사용자
+    문장보다 앞에 오므로 첫 번째가 곧 경계다. 마지막 기준으로 하면 사용자가
+    자기 메시지 뒤에 `[End of thread context]` 를 붙여 own 을 비우고 백스톱을
+    회피할 수 있다.
+
+    표식이 없거나(평문 메시지) 코어가 형식을 바꿔 못 떼면 body 를 그대로 준다 —
+    오늘 동작과 같고, 판정 대상이 넓어지는 쪽이라 fail-open 이 아니다.
+    """
+    if not body.startswith(_THREAD_CTX_HEAD):
+        return body
+    idx = body.find(_THREAD_CTX_END)
+    if idx < 0:
+        logger.warning("[prompt-gate] 스레드 컨텍스트 종결 표식(%s)을 찾지 못했다 "
+                       "— 코어 형식이 바뀌었는지 확인이 필요하다", _THREAD_CTX_END)
+        return body
+    return body[idx + len(_THREAD_CTX_END):].lstrip("\r\n \t")
+
+
+def _model_visible_text(event):
+    """(visible, body, own) — 게이트가 보는 세 층.
+
+    visible : 모델이 실제로 받게 될 것에 가장 가까운 값. 게이트가 event.text 만
+              보면 인용(reply)·채널 컨텍스트로 실려 오는 내용이 분류를 거치지 않고
+              모델에 도달한다. 인젝션 백스톱(HARD_BLOCK)은 이 값을 본다.
+    body    : event.text 원본. 코어가 붙인 스레드 컨텍스트가 포함될 수 있다.
+    own     : 이번 턴에 사용자가 실제로 친 문장. 관리자 전용 판정·커맨드 해석·
+              감사 로그·분류기 <request> 는 이 값을 쓴다 — 접근 제어와 로그의
+              근거는 사용자가 한 말이어야 한다.
     """
     parts = []
     for attr in ("channel_context", "reply_to_text", "quoted_text"):
@@ -317,7 +361,7 @@ def _model_visible_text(event):
             parts.append(v)
     body = getattr(event, "text", "") or ""
     parts.append(body)
-    return "\n".join(parts), body
+    return "\n".join(parts), body, _own_text(body)
 
 
 def _split_command(text):
@@ -402,22 +446,30 @@ def register(ctx):
         )
         return (getattr(res, "text", "") or "").strip().strip('"\'`.').lower()
 
-    def _classify(text, history):
+    def _classify(text, history, background=""):
         """카테고리 하나를 돌려준다. 판정 불가는 전부 'unknown'.
 
         ctx.llm 의 timeout 은 **시도당** 값이라 코어가 전송 오류로 재시도하면
         총 대기가 몇 배로 늘고, 그동안 게이트웨이 이벤트 루프 전체가 멈춘다.
         그래서 워커 스레드에 던지고 벽시계 예산을 게이트가 직접 지킨다.
         """
+        # <request> 는 **이번 턴에 사용자가 친 문장만** 담는다. 스레드 컨텍스트·
+        # 인용·채널 컨텍스트는 <context> 로 내린다 — 판정 대상이 아니라 배경이다.
+        # 예전에는 그 전부를 <request> 로 넣었고, 그래서 앞선 DB 질문이 계속
+        # 판정을 끌고 갔다 (2026-08-10 실사례).
         payload = ""
-        if history:
-            payload += ("<context>\n같은 대화의 직전 발화다. 요청이 여러 메시지로 "
-                        "쪼개졌을 수 있으니, <request> 가 혼자서는 뜻이 통하지 않는 "
-                        "조각이면 이어지는 의도 전체로 판정하라.\n"
-                        "반대로 <request> 가 그 자체로 완결된 다른 주제면 이 "
-                        "<context> 는 무시하라 — 앞에서 무엇을 얘기했든 새 주제의 "
-                        "분류를 그쪽으로 끌고 가지 마라.\n"
-                        + "\n".join(history) + "\n</context>\n")
+        if history or background:
+            payload += ("<context>\n아래는 **배경**이다. 분류 대상이 아니다.\n"
+                        "<request> 가 혼자서는 뜻이 통하지 않는 조각일 때만 이어지는 "
+                        "의도 전체로 판정하라 (요청을 여러 메시지로 쪼갠 우회 대응).\n"
+                        "<request> 가 그 자체로 완결된 주제면 이 <context> 는 "
+                        "무시하라 — 앞에서 무엇을 얘기했든, 인용·스레드 기록에 무엇이 "
+                        "있든 새 주제의 분류를 그쪽으로 끌고 가지 마라.\n")
+            if history:
+                payload += "\n".join(history) + "\n"
+            if background:
+                payload += background + "\n"
+            payload += "</context>\n"
         payload += "<request>\n" + text + "\n</request>"
         fut = _POOL.submit(_call_llm, payload)
         try:
@@ -433,7 +485,8 @@ def register(ctx):
         # fail-open 되지 않게 하기 위해서다.
         event = kwargs.get("event")
         gateway = kwargs.get("gateway")
-        visible, body = _model_visible_text(event) if event is not None else ("", "")
+        visible, body, own = (_model_visible_text(event) if event is not None
+                              else ("", "", ""))
         src = getattr(event, "source", None)
         platform = getattr(getattr(src, "platform", None), "value", "") or str(
             getattr(src, "platform", "") or "")
@@ -441,12 +494,15 @@ def register(ctx):
         mid = str(getattr(event, "message_id", "") or "")
         ids = _identities(event)
         is_admin = bool(ids & st["admins"])
-        # 감사 로그에는 **사용자가 친 본문**을 남긴다. visible 을 남기면 앞머리가
-        # channel_context 라서 "사용자가 무슨 말을 했는데 막혔나"를 로그로 알 수 없다
-        # (2026-08-10: 차단된 질문이 로그에 'Cronjob Response: daily-farewell' 로
-        #  남아 원인 추적이 한 바퀴 헛돌았다).
-        excerpt = body[:150] + (f" [+ctx {len(visible) - len(body)}자]"
-                                if len(visible) > len(body) else "")
+        # 감사 로그에는 **사용자가 이번에 친 문장**을 남긴다. visible·body 를 남기면
+        # 앞머리가 channel_context 나 스레드 컨텍스트라서 "사용자가 무슨 말을 했는데
+        # 막혔나"를 로그로 알 수 없다 (2026-08-10: 차단된 질문이 로그에 각각
+        # 'Cronjob Response: daily-farewell' 와 '[Thread context — …' 로 남아
+        #  원인 추적이 두 바퀴 헛돌았다).
+        excerpt = own[:150] + (f" [+ctx {len(visible) - len(own)}자]"
+                               if len(visible) > len(own) else "")
+
+        hit = None          # ADMIN_GATE 정규식 후보. except 절에서도 읽는다
 
         def blocked(category, notice):
             """차단 반환값. 모델에는 아무것도 안 가고, 사유만 사용자에게 직접 간다."""
@@ -500,7 +556,9 @@ def register(ctx):
             # /steer·/queue·/moa 와 스킬·번들 커맨드는 인자를 그대로 모델에 넘기고,
             # 첫 토큰에 "/" 가 또 있으면 코어는 커맨드로 인정하지 않아 원문이
             # 평문으로 모델에 간다. 인자 없는 내장 커맨드만 예외로 둔다.
-            name, _args = _split_command(body)
+            # own 으로 판정한다 — body 앞에 스레드 컨텍스트가 붙으면 startswith("/")
+            # 가 깨져서 스레드 안에서는 커맨드가 아예 인식되지 않았다.
+            name, _args = _split_command(own)
             if name and name in ADMIN_COMMANDS:
                 return decide("agent_restart", "command")
             if name and name in SAFE_BARE_COMMANDS and not _args.strip():
@@ -517,46 +575,82 @@ def register(ctx):
                 if pat.search(visible):
                     return decide(cat, "regex")
 
-            # ADMIN_GATE 만은 **이번에 사용자가 친 본문(body)** 으로 판정한다.
-            # visible 에는 channel_context·인용문, 즉 그 대화에 쌓인 과거 발화가
-            # 통째로 들어 있다. 그걸로 판정하면 DM 에 DB 얘기가 한 번 오간 뒤로는
-            # 무슨 말을 쳐도 db_schema_query 가 매칭돼, 관리자 전용 차단이
-            # mode 와 무관하게 영구히 걸린다 (2026-08-10 실사례: 같은 DM 에서
-            # "댓글 저장은 어느 API 를 타?" 포함 4건 연속 무응답, via=regex).
+            # ADMIN_GATE 는 **이번에 사용자가 친 문장(own)** 으로만 후보를 고른다.
+            # visible·body 에는 channel_context·인용문·코어가 붙인 스레드 컨텍스트,
+            # 즉 그 대화에 쌓인 과거 발화가 통째로 들어 있다. 그걸로 판정하면 DB
+            # 얘기가 한 번 오간 뒤로는 무슨 말을 쳐도 db_schema_query 가 매칭돼,
+            # 관리자 전용 차단이 mode 와 무관하게 영구히 걸린다 (2026-08-10 실사례
+            # 두 건: DM 은 channel_context, 스레드는 [Thread context] 접두부).
             # ADMIN_ONLY 는 관측이 아니라 접근 제어라 오탐 비용이 가장 크고,
             # 판정 근거는 사용자가 실제로 한 말이어야 한다.
             # 인용문에 실려 온 인젝션은 위 HARD_BLOCK 이 visible 전체로 계속 본다.
+            hit = None
             for pat, cat in ADMIN_GATE_RE:
-                if not pat.search(body):
+                if not pat.search(own):
                     continue
-                if cat == "db_schema_query" and not DB_REQUEST_RE.search(body):
+                if cat == "db_schema_query" and not DB_REQUEST_RE.search(own):
                     # 화제어만 있고 요청 표지가 없다 — 언급·항의일 수 있다.
                     # 백스톱을 건너뛰고 분류기 판정에 맡긴다 (DB_REQUEST_RE 주석 참조)
                     continue
-                return decide(cat, "regex")
+                hit = cat
+                break
+
+            # agent_restart 는 대상어와 명령형을 짝지어 이미 좁다. 재시작은 오탐보다
+            # 미탐 비용이 크므로 분류기 확인 없이 정규식 단독으로 차단한다.
+            if hit == "agent_restart":
+                return decide(hit, "regex")
 
             if mid and mid in seen:
                 return decide(seen[mid], "cache")
 
             history = list(recent.get(session) or ())
-            category = _classify(visible, history)
+            # own 은 visible 의 **끝**에 있다 (channel_context·인용·스레드 접두부가
+            # 앞에 붙는 구조). 그 앞부분이 배경이고, 요청에 가까운 뒤쪽을 남긴다.
+            background = (visible[:len(visible) - len(own)].strip()
+                          if len(visible) > len(own) else "")
+            category = _classify(own, history, background[-1500:])
+
+            # db_schema_query 정규식 히트는 **후보**일 뿐이다. 차단은 분류기도 같은
+            # 판정일 때만 성립한다 — 패턴 3 `\b(스키마|schema|erd|ddl)\b` 이 단독어라
+            # "JSON 스키마 뭐야?" 처럼 DB 와 무관한 질의까지 관리자 전용으로 밀기
+            # 때문이다. 정규식을 계속 손으로 다듬는 대신 분류기가 걸러내게 한다.
+            # 분류기가 죽으면 _classify 가 예외를 던지고, 아래 except 가 정규식
+            # 히트를 근거로 차단한다 — 최소 방어선은 그대로 남는다.
+            if hit == "db_schema_query" and category != "db_schema_query":
+                logger.info("[prompt-gate] admin_gate 후보 기각: regex=%s llm=%s "
+                            "platform=%s chat=%s", hit, category, platform, session)
 
             if mid:
                 seen[mid] = category
                 while len(seen) > 256:
                     seen.popitem(last=False)
-            if st["context_turns"] > 0 and session:
+
+            result = decide(category, "regex+llm" if hit else "llm")
+
+            # 통과한 발화만 분류기 <context> 에 남긴다. 차단된 발화를 남기면 그
+            # 주제가 다음 판정을 끌어당겨 "차단 항의도 또 차단" 루프가 된다
+            # (2026-08-10: 오답 지적 → 또 차단 → 3턴 반복).
+            # 대가: 요청을 두 메시지로 쪼갠 우회에서 앞 조각이 차단되면 뒤 조각은
+            # 새로 판정된다. 앞 조각이 이미 차단됐으므로 그 시도는 실패한 상태다.
+            if result is None and st["context_turns"] > 0 and session and own.strip():
                 recent.setdefault(session, deque(maxlen=st["context_turns"]))
-                recent[session].append(visible[:500])
+                recent[session].append(own[:500])
                 recent.move_to_end(session)
                 while len(recent) > 128:
                     recent.popitem(last=False)
-            return decide(category, "llm")
+            return result
 
         except Exception as exc:
             # 여기서 raise 하면 코어가 삼키고 통과시킨다(fail-open). 그래서 직접 막는다.
             logger.warning("[prompt-gate] 판정 실패 → mode=%s 기준으로 처리: %s",
                            st["mode"], exc)
+            # 관리자 전용 후보가 이미 잡혀 있었다면 분류기 확인 없이 차단한다.
+            # 확인 단계를 넣은 목적은 오탐 제거이지 방어선 약화가 아니다 —
+            # 분류기가 죽으면 정규식 단독 판정으로 돌아간다 (fail-closed).
+            if hit in ADMIN_ONLY:
+                logger.warning("[prompt-gate] 분류기 확인 실패 → 정규식 단독 차단: %s",
+                               hit)
+                return decide(hit, "regex")
             _audit("BLOCKED_PROMPT" if st["mode"] == "enforce" else "WOULD_BLOCK_PROMPT",
                    platform=platform, session=session, rule="gate_error",
                    detail=f"{type(exc).__name__}: {exc}")
