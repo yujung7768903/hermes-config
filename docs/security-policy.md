@@ -197,8 +197,8 @@
 /home/ec2-user/                  # 관리자 유저 (hermes 접근 불가)
 │   ├── .hermes/                 # 이관 전 설정 실체. 쓰는 프로세스 없음
 │   ├── .hermes-migrated         # /home/hermes/.hermes 심볼릭 링크
-│   ├── hermes-workspace/        # 빈 디렉터리. hermes 홈에는 없다
-│   └── hermes-readonly/         # 빈 디렉터리. hermes 홈에는 없다
+│   ├── hermes-workspace/        # 빈 디렉터리. 쓰이지 않음
+│   └── hermes-readonly/         # 빈 디렉터리. 쓰이지 않음
 │
 ├── /home/hermes/                # hermes 에이전트 유저
 │   ├── .hermes/                 # Hermes 런타임·설정·스킬·플러그인

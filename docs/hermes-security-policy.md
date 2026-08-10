@@ -68,9 +68,9 @@ security_guard.py의 원격 판정은 두 경로에 의존한다.
 차단을 우회하는 경로" 위험은 사라졌다. 정책의 정본은 hermes 계정 인스턴스다.
 
 `/home/ec2-user/.hermes` 실체와 `.hermes-migrated` 심볼릭 링크는 그대로 남아 있으나
-어떤 프로세스도 쓰지 않는다. 격리 디렉터리는 `/home/hermes/private` 이 생성됐고,
-`hermes-workspace/`·`hermes-readonly/` 는 여전히 ec2-user 홈에만 있다 — 훅 규칙 2 의
-차단 메시지가 안내하는 `~/hermes-workspace/` 가 hermes 홈에 없는 상태다.
+어떤 프로세스도 쓰지 않는다. 격리 디렉터리는 `/home/hermes/private` 이 생성됐다.
+훅 규칙 2 는 대체 경로를 안내하지 않으므로 `hermes-workspace/`·`hermes-readonly/`
+부재는 정책상 결함이 아니다 (규칙 2 절 참조).
 
 아래는 해소 전 기록이다.
 
@@ -137,8 +137,6 @@ hermes-agent v0.18.0 의 실제 로더로 검증했다 —
   [완료 2026-08-09] 'aws *' 를 L2 정규식으로 이동, '* aws *' 는 deny 에서 제거
   [높음] 원격 채널 toolset을 좁힐지, full access를 유지하고 hook으로만
          통제할지 명시적으로 결정
-  [높음] 훅 규칙 2 가 안내하는 ~/hermes-workspace/ 가 hermes 홈에 없다.
-         디렉터리를 만들지, 안내 문구를 바꿀지 결정
   [중간] LG(prompt-gate) enforce 전환 — 오차단 0 관측 후
   [낮음] L1 차단도 감사 로그에 기록
 
@@ -297,9 +295,14 @@ terminal 도구 없이도 파일이 삭제됨을 직접 확인했다.
   rf"{re.escape(HOME)}/private\b" 를 쓴다 (security_guard.py 규칙 2).
   계정이 바뀌어도 따라간다. 위 "오류" 항목은 해소된 상태다.
 
-접근 거부 메시지 예시:
+접근 거부 메시지 (security_guard.py 실제 문구):
   [보안 정책] 접근 금지 디렉토리입니다.
-  접근이 필요하다면 ~/hermes-workspace/ 로 복사 후 이용하세요.
+  경로: {대상 경로}
+  ~/private 및 하위 디렉토리는 Hermes 접근이 차단됩니다.
+
+  [2026-08-10 정정] 이 자리에 "접근이 필요하다면 ~/hermes-workspace/ 로 복사 후
+  이용하세요" 가 적혀 있었다. 훅은 그 문구를 내지 않는다 — 코드에 hermes-workspace
+  언급이 없다. 대체 경로를 안내하지 않는 것이 현재 동작이다.
 
 적용 파일: /home/hermes/.hermes/hooks/security_guard.py
 
@@ -639,7 +642,7 @@ jobs.json 6, AWS 2(`aws *`·IMDSv2 토큰 헤더), IMDS 주소 1, chmod/chown 3.
 | R1-1 | 전 플랫폼 | terminal | `rm`, `rmdir`, `shred`, `unlink`, `truncate` 포함 | [보안 정책] 파일 삭제 명령은 허용되지 않습니다. |
 | R1-2 | 전 플랫폼 | terminal | `find ... -delete` 또는 `find ... -exec rm` 패턴 | 동일 |
 | R1-3 | 전 플랫폼 | patch | `*** Delete File:` 지시어 포함 | [보안 정책] 파일 삭제는 허용되지 않습니다. (patch Delete File 지시어 차단) |
-| R2-1 | 전 플랫폼 | read_file | path가 `~/private` 하위 | [보안 정책] 접근 금지 디렉토리입니다. ~/hermes-workspace/ 로 복사 후 이용하세요. |
+| R2-1 | 전 플랫폼 | read_file | path가 `~/private` 하위 | [보안 정책] 접근 금지 디렉토리입니다. ~/private 및 하위 디렉토리는 Hermes 접근이 차단됩니다. |
 | R2-2 | 전 플랫폼 | write_file | path가 `~/private` 하위 | 동일 |
 | R2-3 | 전 플랫폼 | search_files | path가 `~/private` 하위 | 동일 |
 | R2-4 | 전 플랫폼 | patch | Update/Create/Delete File 대상 경로가 `~/private` 하위 | 동일 |
