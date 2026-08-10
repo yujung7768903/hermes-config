@@ -58,24 +58,80 @@
 > 하지 않기로 했기 때문이다 (위 "배경" 정정 참조). git pull 만 허용되고, 그것도
 > 하네스 갱신 경로로만 쓴다. 개발 자동화를 다시 검토할 때 이 절이 출발점이 된다.
 
-> **[2026-08-10 갱신]** 하네스 갱신이 자동화됐고, push 는 명시적으로 차단됐다.
+> **[2026-08-10 갱신]** 하네스 갱신이 GitHub Actions 로 자동화됐고, push 는 명시적으로
+> 차단됐다.
 >
 > | | 내용 |
 > | --- | --- |
-> | 반영 | 관리자가 main 에 push → 서버 크론이 1분마다 fetch → author 검증 후 `merge --ff-only` |
-> | author 필터 | `yu-jung0422@hankookilbo.com` · `yu-jung31476@naver.com` · `68562176+yujung7768903@users.noreply.github.com` 세 개만 통과. 하나라도 밖에 있으면 그 push 전체를 보류 |
-> | 재시작 | `config.yaml`·`SOUL.md`·`plugins/`·`skills/`·`memories/` 가 바뀐 경우만 `systemctl restart hermes-gateway` |
-> | push 차단 | L1 `approvals.deny` · L2 `security_guard` 훅 규칙 6 · 서버 저장소 `remote.origin.pushurl` 봉인 |
-> | 구현 | `scripts/deploy_from_git.sh`, `/etc/cron.d/hermes-deploy`, 로그 `/var/log/hermes-deploy.log` |
-> | 크론 소유 | root. 실행본은 `/opt/hermes-deploy/deploy.sh` (root 소유) — hermes 소유 트리의 스크립트를 root 로 실행하면 그 파일을 쓸 수 있는 주체가 root 실행을 얻는다 |
+> | 반영 | main 에 push → `.github/workflows/deploy.yml` → author 검증 → SSM `AWS-RunShellScript` 로 서버에서 `fetch` + `merge --ff-only` |
+> | author 필터 | `yu-jung0422@hankookilbo.com` · `yu-jung31476@naver.com` · `68562176+yujung7768903@users.noreply.github.com` 세 개만 통과. 하나라도 밖에 있으면 그 push 전체를 보류하고 워크플로우가 실패한다 |
+> | 재시작 | `config.yaml`·`SOUL.md`·`plugins/`·`skills/`·`memories/` 가 바뀐 경우만 `systemctl restart hermes-gateway` 후 `is-active` 확인 |
+> | push 차단 | L1 `approvals.deny` · L2 `security_guard` 훅 규칙 6 · 서버 저장소 `remote.origin.pushurl` 봉인(배포마다 재적용) |
+> | 구현 | `.github/workflows/deploy.yml`, 게이트 판정은 `scripts/deploy_gate.sh` |
+> | 검증 | `tests/test_deploy_gate.py`(15건), `tests/test_deploy_workflow.py`(23건), `tests/test_git_push_block.py`(39건) |
+>
+> **왜 SSH 가 아니라 SSM 인가.** 러너에서 서버로 들어오려면 보안그룹을 열어야 하는데,
+> GitHub 이 공개하는 `actions` 대역은 **7,297개**(IPv4 5,658)이고 주 단위로 바뀐다
+> (`api.github.com/meta`). SG 규칙 한도와 prefix list 한도를 넘고, 넘지 않더라도 대역
+> 동기화 자동화가 또 필요해진다. 사실상 22번을 전면 개방하는 것과 같아진다.
+>
+> SSM 은 방향이 반대다 — 러너가 AWS API 로 말하고, 서버의 SSM 에이전트가 아웃바운드
+> 443 으로 명령을 받아 실행한다. 결과:
+>
+> | | 값 |
+> | --- | --- |
+> | 추가 인바운드 SG 규칙 | 0개 |
+> | GitHub 에 저장하는 장기 자격증명 | 0개 (OIDC 로 역할 위임) |
+> | bastion 관여 | 없음 |
+>
+> **준비물** (한 번만).
+>
+> 1. IAM OIDC provider — `token.actions.githubusercontent.com`, audience `sts.amazonaws.com`
+> 2. 위임받을 IAM 역할. 신뢰 정책을 이 저장소의 main 으로 못박는다:
+>
+> ```json
+> {
+>   "Version": "2012-10-17",
+>   "Statement": [{
+>     "Effect": "Allow",
+>     "Principal": {"Federated": "arn:aws:iam::<ACCOUNT_ID>:oidc-provider/token.actions.githubusercontent.com"},
+>     "Action": "sts:AssumeRoleWithWebIdentity",
+>     "Condition": {"StringEquals": {
+>       "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+>       "token.actions.githubusercontent.com:sub": "repo:yujung7768903/hermes-config:ref:refs/heads/main"
+>     }}
+>   }]
+> }
+> ```
+>
+> 3. 그 역할의 권한 정책 — 이 인스턴스 하나에만 명령을 보낼 수 있게 한다:
+>
+> ```json
+> {
+>   "Version": "2012-10-17",
+>   "Statement": [
+>     {"Effect": "Allow", "Action": "ssm:SendCommand", "Resource": [
+>       "arn:aws:ssm:<REGION>::document/AWS-RunShellScript",
+>       "arn:aws:ec2:<REGION>:<ACCOUNT_ID>:instance/<INSTANCE_ID>"
+>     ]},
+>     {"Effect": "Allow", "Action": ["ssm:GetCommandInvocation"], "Resource": "*"}
+>   ]
+> }
+> ```
+>
+> 4. hermes 인스턴스의 인스턴스 프로파일에 `AmazonSSMManagedInstanceCore`, SSM 에이전트
+>    기동 (Amazon Linux 는 기본 포함). 아웃바운드 443 만 쓰므로 기존 SG 그대로.
+> 5. 저장소 시크릿 3개 — `AWS_ROLE_ARN`, `AWS_REGION`, `HERMES_INSTANCE_ID`.
+>    **인스턴스 ID·역할 ARN·리전을 워크플로우 본문에 두지 않는다.** 이 저장소는 서버로
+>    pull 되고 에이전트가 그 파일을 읽을 수 있어서, 본문에 두면 "자격증명·인스턴스 정보를
+>    조회·전달하지 않는다"(SOUL.md)가 깨진다. `tests/test_deploy_workflow.py` 가 이걸
+>    회귀 검사한다.
 >
 > author 는 위조 가능하므로 이 필터는 보안 경계가 아니라 오배포 방지다. 실제 경계는
-> GitHub 저장소의 push 권한이다. 서버에는 write 권한 토큰을 두지 않는다 (read-only
-> deploy key 가 이상적).
+> GitHub 저장소의 push 권한이다. 서버에는 write 권한 토큰을 두지 않는다.
 >
-> 폴링을 택한 이유 — 서버는 private 서브넷이고 bastion 인바운드 SSH 는 사내 IP 로
-> 제한돼 있다. GitHub Actions 러너와 GitHub 웹훅은 랜덤 IP 라 보안그룹을 열지 않으면
-> 서버에 도달할 수 없다.
+> SSM 명령은 root 로 실행된다. git 조작은 전부 `sudo -u hermes -H` 를 거치고, root 가
+> 직접 쓰는 것은 `systemctl restart` 뿐이다.
 
 - 개발 작업은 /home/hermes/work/ 에서만 수행
 - GitHub organization 단위로 git pull 허용

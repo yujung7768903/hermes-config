@@ -34,6 +34,7 @@
 # 추적 대상
 !.gitignore
 !.env.example
+!.github/workflows/*.yml
 !config.yaml
 !SOUL.md
 !shell-hooks-allowlist.json

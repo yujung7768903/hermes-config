@@ -28,23 +28,16 @@
 
 전부 `no_agent: true` — 모델을 거치지 않고 스크립트만 실행함.
 
-## 시스템 크론 (헤르메스 내장 크론이 아님)
+## 하네스 자동 반영은 크론이 아님
 
-위 표와 별개로 OS 크론에 등록된 잡이 하나 있음. 헤르메스 내장 스케줄러 밖이라
-`hermes cron list` 에 안 나오고, 에이전트가 조작할 수 없음(root 소유).
-
-| 파일 | 주기 | 실행 유저 | 내용 |
-| --- | --- | --- | --- |
-| `/etc/cron.d/hermes-deploy` | `* * * * *` | root | `/opt/hermes-deploy/deploy.sh` — main 의 관리자 커밋을 `~/.hermes` 로 반영하고 필요 시 게이트웨이 재시작 |
-
-정의는 `scripts/deploy_from_git.sh`, 설치는 `sudo scripts/deploy_from_git.sh --install`,
-로그는 `/var/log/hermes-deploy.log`. 정책은 `docs/security-policy.md` "Git / 개발 작업"
-2026-08-10 갱신 참조.
+main push 시의 하네스 반영은 스케줄러를 쓰지 않음. GitHub Actions 가 SSM 으로 명령을
+보내는 방식이라 서버에 등록된 잡이 없음 (`.github/workflows/deploy.yml`, 정책은
+`docs/security-policy.md` "Git / 개발 작업" 2026-08-10 갱신).
 
 `security_watch.py` 와의 관계 — 감시 대상은 `~/.hermes` 의 **커밋되지 않은** 변경이라
 자동 반영은 알림을 만들지 않음(`merge --ff-only` 는 작업트리를 깨끗한 상태로 옮김).
-반영이 보류(`HOLD`)되면 서버 HEAD 가 그대로라 역시 알림 대상이 아니므로, 보류를
-알아채는 경로는 배포 로그뿐임.
+author 검증으로 반영이 보류되면 서버 HEAD 가 그대로라 역시 알림 대상이 아님 — 보류를
+알아채는 경로는 GitHub Actions 의 실패 표시임.
 
 ### 놓친 실행의 뒤늦은 수행
 

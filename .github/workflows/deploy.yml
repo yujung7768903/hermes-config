@@ -1,0 +1,114 @@
+name: deploy
+
+# main 에 push 되면 hermes 서버에 반영한다.
+#
+# 서버는 private 서브넷이고 GitHub Actions 러너 IP 는 7,000개가 넘어(주 단위 변동)
+# 보안그룹으로 허용할 수 없다. 그래서 인바운드를 열지 않고, 러너가 AWS API 로 말하고
+# 서버의 SSM 에이전트가 아웃바운드로 명령을 받아 실행한다.
+#   - 인바운드 SG 규칙: 0개
+#   - GitHub 에 저장하는 장기 자격증명: 0개 (OIDC 로 역할 위임)
+#
+# 인스턴스 ID·역할 ARN·리전은 전부 시크릿이다. 이 저장소는 서버로 pull 되고
+# 에이전트가 그 파일들을 읽을 수 있어서, 인스턴스 정보를 워크플로우 본문에 두면
+# "자격증명·인스턴스 정보를 조회·전달하지 않는다"(SOUL.md)가 깨진다.
+#
+# 필요한 시크릿:
+#   AWS_ROLE_ARN         OIDC 로 위임받을 IAM 역할 (이 저장소만 신뢰)
+#   AWS_REGION           hermes 인스턴스가 있는 리전
+#   HERMES_INSTANCE_ID   대상 EC2 인스턴스 ID
+# 준비 절차는 docs/security-policy.md "Git / 개발 작업" 참조.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  id-token: write   # OIDC 토큰 발급용. 이것 없이는 역할 위임이 안 된다
+  contents: read
+
+# 두 push 가 겹치면 순서가 뒤집힐 수 있다. 취소하지 않고 줄을 세운다 —
+# 취소하면 먼저 온 커밋이 반영되지 않은 채 지나간다.
+concurrency:
+  group: hermes-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # deploy_gate.sh 가 before..after 범위를 훑는다
+
+      - name: author 검증 · 재시작 판정
+        id: gate
+        run: bash scripts/deploy_gate.sh "${{ github.event.before }}" "${{ github.sha }}" >> "$GITHUB_OUTPUT"
+
+      - name: AWS 역할 위임 (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: 서버 반영 (SSM)
+        env:
+          INSTANCE_ID: ${{ secrets.HERMES_INSTANCE_ID }}
+          RESTART: ${{ steps.gate.outputs.restart }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          # 원격에서 돌 명령. 따옴표가 섞이면 셸 인용 조립은 조용히 깨지므로
+          # 파일로 떨어뜨린 뒤 python 으로 JSON 을 만든다.
+          # 구분자를 따옴표로 감싸(<<'REMOTE_EOF') 러너에서 $R·$@ 가 미리
+          # 확장되지 않게 한다 — 확장되면 원격에서 빈 문자열이 된다.
+          read -r -d '' REMOTE <<'REMOTE_EOF' || true
+          set -euo pipefail
+          R=/home/hermes/.hermes
+          as_hermes() { sudo -u hermes -H git -C "$R" "$@"; }
+
+          # push 봉인은 매번 다시 걸어 자기치유하게 둔다 (fetch/pull 에는 영향 없음)
+          as_hermes config remote.origin.pushurl DISABLED-BY-POLICY
+
+          as_hermes fetch --quiet origin '+refs/heads/main:refs/remotes/origin/main'
+          before=$(as_hermes rev-parse --short HEAD)
+          as_hermes merge --ff-only origin/main
+          after=$(as_hermes rev-parse --short HEAD)
+          echo "HEAD $before -> $after"
+
+          if [ "__RESTART__" = "1" ]; then
+            systemctl restart hermes-gateway
+            sleep 3
+            systemctl is-active hermes-gateway
+          else
+            echo "재시작 불필요 경로만 변경"
+          fi
+          REMOTE_EOF
+
+          printf '%s' "${REMOTE//__RESTART__/$RESTART}" > remote.sh
+          python3 - <<'PY' > params.json
+          import json
+          print(json.dumps({"commands": open("remote.sh").read().split("\n")}))
+          PY
+
+          CMD=$(aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
+            --document-name AWS-RunShellScript \
+            --comment "hermes-config ${SHA:0:8}" \
+            --parameters file://params.json \
+            --query Command.CommandId --output text)
+          echo "SSM command: $CMD"
+
+          # wait 는 실패 상태에서 비0 으로 끝난다. 출력을 먼저 찍어야 원인을 볼 수 있다.
+          aws ssm wait command-executed --command-id "$CMD" --instance-id "$INSTANCE_ID" || true
+
+          aws ssm get-command-invocation --command-id "$CMD" --instance-id "$INSTANCE_ID" \
+            --query 'StandardOutputContent' --output text
+          aws ssm get-command-invocation --command-id "$CMD" --instance-id "$INSTANCE_ID" \
+            --query 'StandardErrorContent' --output text >&2
+
+          STATUS=$(aws ssm get-command-invocation --command-id "$CMD" \
+            --instance-id "$INSTANCE_ID" --query 'Status' --output text)
+          echo "상태: $STATUS"
+          [ "$STATUS" = Success ]
