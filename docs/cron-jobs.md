@@ -28,6 +28,12 @@
 
 전부 `no_agent: true` — 모델을 거치지 않고 스크립트만 실행함.
 
+### 놓친 실행의 뒤늦은 수행
+
+서버가 멈춰 예정 시각을 넘긴 잡은 다음 기동 때 **유예 2시간(`grace=7200s`) 안이면 즉시
+실행**되고 다음 차례를 다시 잡음. 로그에 `missed its scheduled time ... Running now` 로
+남음. 스케줄과 무관한 시각에 결과가 도착하면 이걸 먼저 의심함.
+
 ### 일일 리포트와 10분 감시의 차이
 
 | | `security_report.py` | `security_watch.py` |
@@ -97,9 +103,7 @@ sudo -u hermes cp /tmp/jobs.json.bak /home/hermes/.hermes/cron/jobs.json
 ### 2026-08-07 사고 — 이 절차를 안 밟아서 잡이 전부 날아감
 
 추적 해제 커밋(`b447982`)이 서버에 반영될 때 위 백업 절차 없이 진행돼 `jobs.json` 이
-삭제됨. slack-improvement-report·slack-security-report 두 잡이 소실됐고, 08:23 에
-`daily-farewell` (`30 8 * * *`, DM 전송) 잡 하나만 남은 상태로 재생성돼 있었음.
-등록자 불명 — 관리자가 만든 잡이 아님.
+삭제됨. slack-improvement-report·slack-security-report 두 잡이 소실됨.
 
 세 잡은 `hermes cron create` 로 재등록함. 추적 해제 상태이므로 앞으로 `jobs.json` 은
 git 이 건드리지 않고, 이 사고는 반복되지 않음.
