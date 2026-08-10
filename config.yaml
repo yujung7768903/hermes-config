@@ -227,6 +227,14 @@ plugins:
       # 요청을 두 메시지로 쪼개 분류를 피하는 우회에 대응한다. 0 이면 끔.
       context_turns: 2
 
+      # 관리자 전용 카테고리(db_schema_query·agent_restart)를 통과시킬 발신자 ID.
+      # 그 외 사용자에게는 mode 와 무관하게 항상 차단된다 — 관측 실험이 아니라
+      # 접근 제어이기 때문이다. 비어 있으면 아무도 통과하지 못한다.
+      # 값은 플러그인이 이벤트에서 찾은 식별자(user_id·chat_id 등) 중 하나와
+      # 일치하면 된다. 실제로 어떤 값이 오는지는 차단 로그의 ids= 에 남는다.
+      admins:
+        - D0BGQGRBM51
+
       # model 미지정 = 호스트 기본 모델(sonnet-4-6). 더 싼 모델로 바꾸려면
       # allow_model_override 를 켜고 model 에 해당 리전에서 실제로 쓸 수 있는
       # ID 를 적는다. 주의: ctx.llm 이 타는 aux 경로는 위 bedrock.region 을

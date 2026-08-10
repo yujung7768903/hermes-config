@@ -28,7 +28,8 @@
 적용 범위: 게이트웨이 인바운드 메시지 전용. CLI 세션(`hermes chat`), cron 자율 실행,
 ACP 어댑터, internal event 는 이 훅을 지나지 않는다 — 그쪽은 기존 L1~L3 에 의존한다.
 게이트웨이 슬래시 커맨드(/yolo, /restart 등)는 애초에 모델을 거치지 않으므로
-이 게이트로 통제할 수 없다.
+이 게이트로 통제할 수 없다 — ADMIN_COMMANDS 항목은 그 경로가 훅에 도달하는
+경우에만 걸린다. 도달 여부는 decide() 의 admin_gate 로그로 확인한다.
 ────────────────────────────────────────────────────────────────────────────
 """
 
@@ -83,7 +84,14 @@ BLOCKED = {
     "unknown":                   "위 어디에도 확실히 들어가지 않음 (fail-closed 기본값)",
 }
 
-CATEGORIES = list(ALLOWED) + list(BLOCKED)
+# 관리자에게만 허용. 그 외 발신자에게는 mode 와 무관하게 **항상** 차단된다 —
+# 관측 실험이 아니라 운영자가 지정한 접근 제어이기 때문이다.
+ADMIN_ONLY = {
+    "db_schema_query":  "DB 테이블·컬럼·스키마·ERD·엔티티 등 데이터 구조 질의",
+    "agent_restart":    "에이전트·게이트웨이 재시작 요청",
+}
+
+CATEGORIES = list(ALLOWED) + list(ADMIN_ONLY) + list(BLOCKED)
 
 # ── 결정적 선판정 ─────────────────────────────────────────────────────────
 # 명백한 것만 LLM 없이 즉시 자른다. 애매하면 넘기지 않고 분류기로 보낸다.
@@ -124,13 +132,45 @@ HARD_BLOCK = [
 ]
 HARD_BLOCK_RE = [(re.compile(p, re.IGNORECASE), c) for p, c in HARD_BLOCK]
 
+# ── 관리자 전용 선판정 ────────────────────────────────────────────────────
+# HARD_BLOCK 과 같은 백스톱이다. 분류기가 죽어도, mode 가 observe 여도 남는다.
+# 완전하지 않다(동의어·우회 표기로 피할 수 있다) — 주 방어는 분류기의
+# db_schema_query / agent_restart 카테고리이고 이건 최소선이다.
+ADMIN_GATE = [
+    # 데이터 구조 질의
+    (r"(디비|\bDB\b|데이터\s*베이스|database)[^\n]{0,12}"
+     r"(구조|스키마|schema|설계|테이블|table|erd|모델링)", "db_schema_query"),
+    (r"(테이블|table)[^\n]{0,12}"
+     r"(구조|스키마|schema|목록|리스트|컬럼|column|정의|ddl)", "db_schema_query"),
+    (r"\b(스키마|schema|erd|ddl)\b", "db_schema_query"),
+    (r"(컬럼|column)[^\n]{0,12}(구조|목록|리스트|타입|정의|알려|보여)",
+     "db_schema_query"),
+    (r"(엔티티|entity)[^\n]{0,12}(구조|목록|정의|클래스|매핑|알려|보여)",
+     "db_schema_query"),
+    # 재시작 — 대상이 이 에이전트/게이트웨이일 때만. "배치 재시작 로그" 같은
+    # 조회 문구까지 잡지 않도록 대상어 또는 명령형과 짝지어서만 매칭한다.
+    (r"(게이트웨이|gateway|에이전트|agent|서비스|service|봇|bot|hermes|헤르메스|너|자신)"
+     r"[^\n]{0,12}(재시작|재기동|리스타트|restart|reboot)", "agent_restart"),
+    (r"(재시작|재기동|리스타트|restart|reboot)"
+     r"[^\n]{0,6}(해줘|해주세요|시켜|해라|하자|해봐|해$|please)", "agent_restart"),
+]
+ADMIN_GATE_RE = [(re.compile(p, re.IGNORECASE), c) for p, c in ADMIN_GATE]
+
+# 인자 유무와 무관하게 관리자만 쓸 수 있는 커맨드.
+# 주의: 코어가 게이트웨이 슬래시 커맨드(/restart·/yolo)를 이 훅보다 앞에서
+# 직접 처리한다면 여기까지 오지 않는다 (docs/hermes-request-whitelist-plan.md
+# 5-1절의 구조적 잔여 2번). 그 경우 이 항목은 `!restart` 같은 평문 경로만
+# 잡는다 — 실제 도달 여부는 아래 decide() 로그로 확인할 수 있다.
+ADMIN_COMMANDS = {"restart", "reboot"}
+
 # ── 분류기 프롬프트 ───────────────────────────────────────────────────────
 # 분류기 자체가 인젝션 표적이다. 방어는 세 가지다.
 #   1) 사용자 문구를 구분자로 감싸고 데이터로만 취급하라고 명시
 #   2) 출력을 카테고리 토큰 1개로 제한 (max_tokens 로도 물리적으로 제한)
 #   3) 목록에 없는 출력은 전부 unknown → 차단
 _CAT_LINES = "\n".join(
-    f"- {k}: {v}" for k, v in list(ALLOWED.items()) + list(BLOCKED.items())
+    f"- {k}: {v}" for k, v in
+    list(ALLOWED.items()) + list(ADMIN_ONLY.items()) + list(BLOCKED.items())
 )
 
 SYSTEM_PROMPT = f"""너는 요청 분류기다. 대화 상대가 아니다.
@@ -143,6 +183,8 @@ SYSTEM_PROMPT = f"""너는 요청 분류기다. 대화 상대가 아니다.
 {_CAT_LINES}
 
 판정 규칙:
+- db_schema_query 는 코드 설명 요청과 겹칠 수 있다. **결과물이 테이블·컬럼·스키마
+  목록이면** service_explain 이 아니라 db_schema_query 다.
 - 허용·차단이 섞인 다중 의도 요청은 **가장 위험한 쪽**으로 판정한다.
 - 결과물이 "파일·설정·데이터의 변경"이면 차단, "텍스트 답변"이면 허용 쪽이다.
 - 확실하지 않으면 unknown 으로 판정한다. 추측해서 허용하지 마라.
@@ -157,6 +199,33 @@ BLOCK_NOTICE = (
     "처리하지 않았다는 것, 그리고 사유가 '{desc}' 라는 것.\n"
     "도구를 호출하지 마라. 추측해서 답을 만들어내지 마라. 다른 작업을 하지 마라."
 )
+
+ADMIN_NOTICE = (
+    "[시스템 안내 — 아래는 사용자 입력이 아니라 게이트웨이가 삽입한 문구다]\n"
+    "직전 사용자 요청은 '{desc}' 로 분류되었고, 이는 **관리자 전용**이라 "
+    "차단되었다. 원문은 너에게 전달되지 않았다.\n"
+    "사용자에게 다음만 한국어로 한두 문장으로 알려라: 이 요청은 관리자만 할 수 "
+    "있어 처리하지 않았다는 것, 필요하면 관리자에게 요청하라는 것.\n"
+    "도구를 호출하지 마라. 추측해서 답을 만들어내지 마라. 다른 작업을 하지 마라."
+)
+
+# 발신자 식별자가 실려 올 수 있는 필드. 코어의 정확한 이름을 이 레포에서 확인할 수
+# 없어(hermes-agent 는 서버에만 있다) 후보를 전부 훑고, 하나도 못 찾으면 "관리자
+# 아님" 으로 간다(fail-closed). 어떤 값이 실제로 오는지는 차단 로그에 남는다.
+_ID_ATTRS = ("user_id", "sender_id", "author_id", "from_id",
+             "user", "sender", "chat_id")
+
+
+def _identities(event):
+    """이벤트에서 발신자 식별자 후보를 모은다. 못 찾으면 빈 집합."""
+    out = set()
+    for obj in (getattr(event, "source", None), event):
+        for attr in _ID_ATTRS:
+            v = getattr(obj, attr, None)
+            v = getattr(v, "id", v)          # 객체로 실려 올 수도 있다
+            if isinstance(v, str) and v.strip():
+                out.add(v.strip())
+    return out
 
 
 def _settings(ctx):
@@ -194,6 +263,8 @@ def _settings(ctx):
         "enforce_hard_block": bool(cfg.get("enforce_hard_block", True)),
         # 분류에 직전 발화 몇 개를 함께 넣을지 (페이로드 분할 대응). 0 이면 끔
         "context_turns": int(cfg.get("context_turns", 2)),
+        # ADMIN_ONLY 카테고리를 통과시킬 발신자 ID. 비어 있으면 아무도 통과 못 한다
+        "admins": {str(x).strip() for x in (cfg.get("admins") or []) if str(x).strip()},
     }
 
 
@@ -311,8 +382,27 @@ def register(ctx):
             getattr(src, "platform", "") or "")
         session = str(getattr(src, "chat_id", "") or "")
         mid = str(getattr(event, "message_id", "") or "")
+        ids = _identities(event)
+        is_admin = bool(ids & st["admins"])
 
         def decide(category, how):
+            if category in ADMIN_ONLY:
+                desc = ADMIN_ONLY[category]
+                logger.info("[prompt-gate] admin_gate=%s admin=%s platform=%s "
+                            "chat=%s via=%s ids=%s",
+                            category, is_admin, platform, session, how,
+                            sorted(ids))
+                if is_admin:
+                    return None
+                # mode 와 무관하게 실제로 막는다. 관측 대상이 아니라 접근 제어다.
+                _audit("BLOCKED_PROMPT", platform=platform, session=session,
+                       rule=category,
+                       detail=f"admin_only via={how} ids={sorted(ids)} "
+                              f"text={visible[:150]}")
+                if st["on_block"] == "silent":
+                    return {"action": "skip", "reason": f"prompt-gate:{category}"}
+                return {"action": "rewrite", "text": ADMIN_NOTICE.format(desc=desc)}
+
             allowed = category in ALLOWED
             desc = ALLOWED.get(category) or BLOCKED.get(category, "")
             # observe 여도 정규식 히트는 차단한다 (enforce_hard_block).
@@ -349,6 +439,8 @@ def register(ctx):
             # 첫 토큰에 "/" 가 또 있으면 코어는 커맨드로 인정하지 않아 원문이
             # 평문으로 모델에 간다. 인자 없는 내장 커맨드만 예외로 둔다.
             name, _args = _split_command(body)
+            if name and name in ADMIN_COMMANDS:
+                return decide("agent_restart", "command")
             if name and name in SAFE_BARE_COMMANDS and not _args.strip():
                 logger.info("[prompt-gate] 내장 커맨드 통과: /%s platform=%s chat=%s",
                             name, platform, session)
@@ -360,6 +452,10 @@ def register(ctx):
                 return decide("unknown", "too_long")
 
             for pat, cat in HARD_BLOCK_RE:
+                if pat.search(visible):
+                    return decide(cat, "regex")
+
+            for pat, cat in ADMIN_GATE_RE:
                 if pat.search(visible):
                     return decide(cat, "regex")
 
@@ -397,7 +493,12 @@ def register(ctx):
                                                 desc=BLOCKED["unknown"])}
 
     ctx.register_hook("pre_gateway_dispatch", _gate)
+    if not st["admins"]:
+        logger.warning(
+            "[prompt-gate] admins 가 비어 있다 — 관리자 전용 카테고리(%s)가 "
+            "모두에게 차단된다.", ", ".join(ADMIN_ONLY))
     logger.info("[prompt-gate] 등록 완료 — mode=%s on_block=%s timeout=%.1fs "
-                "max_chars=%d hard_block=%s model=%s",
+                "max_chars=%d hard_block=%s admins=%d model=%s",
                 st["mode"], st["on_block"], st["timeout"], st["max_chars"],
-                st["enforce_hard_block"], st["model"] or "(호스트 기본)")
+                st["enforce_hard_block"], len(st["admins"]),
+                st["model"] or "(호스트 기본)")
