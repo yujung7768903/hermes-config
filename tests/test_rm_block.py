@@ -139,5 +139,52 @@ for cmd in BENIGN:
     ok, fail = (ok + 1, fail) if mark == "PASS" else (ok, fail + 1)
     print(f"  {mark}  {cmd:30s}  {'차단(패턴=' + str(p) + ')' if p else '통과'}")
 
+# patch 도구의 Delete File 지시어.
+# 원래 is_remote() 안에 있어서 한 번도 발동한 적이 없었다 — gateway 가 platform 을
+# contextvars 로 바인딩하는데 훅은 별도 subprocess 라 상속을 못 받고, session_id
+# 파싱도 형식이 달라 실패해서 관측된 platform 은 전부 빈 값이었다.
+# 그래서 "platform 이 빈 값일 때도 차단되는가" 가 이 회귀의 핵심이다.
+print("\n── patch Delete File (L2, 전 플랫폼) ──")
+
+
+def patch_blocks(content, platform=""):
+    env = dict(os.environ, HERMES_SESSION_PLATFORM=platform)
+    payload = json.dumps({
+        "tool_name": "patch",
+        "tool_input": {"patch": content},
+        "session_id": "20260806_120000_abcdef",
+    })
+    out = subprocess.run(
+        [sys.executable, GUARD], input=payload, capture_output=True, text=True, env=env
+    ).stdout.strip()
+    if not out:
+        return False
+    return json.loads(out).get("action") == "block"
+
+
+DELETE_PATCH = (
+    "*** Begin Patch\n"
+    "*** Delete File: /home/hermes/.hermes/.env\n"
+    "*** End Patch"
+)
+UPDATE_PATCH = (
+    "*** Begin Patch\n"
+    "*** Update File: /home/hermes/work/a.txt\n"
+    "@@\n-old\n+new\n"
+    "*** End Patch"
+)
+PATCH_CASES = [
+    ("platform 빈 값 (실관측 상태)", DELETE_PATCH, "",      True),
+    ("platform=cli",              DELETE_PATCH, "cli",   True),
+    ("platform=slack",            DELETE_PATCH, "slack", True),
+    ("Update File 은 통과",        UPDATE_PATCH, "",      False),
+]
+for desc, content, plat, should_block in PATCH_CASES:
+    blocked = patch_blocks(content, plat)
+    mark = "PASS" if blocked == should_block else "FAIL"
+    ok, fail = (ok + 1, fail) if mark == "PASS" else (ok, fail + 1)
+    print(f"  {mark}  {desc:28s}  {'차단' if blocked else '통과'}")
+
+
 print(f"\n총 {ok + fail}개  통과: {ok}  실패: {fail}")
 sys.exit(0 if fail == 0 else 1)

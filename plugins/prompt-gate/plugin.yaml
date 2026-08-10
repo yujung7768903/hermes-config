@@ -1,0 +1,7 @@
+name: prompt-gate
+version: 0.1.0
+description: 모델 도달 전 요청 화이트리스트 게이트 (LG 계층). 수행 가능한 업무 카테고리만 통과시킨다.
+author: platform
+kind: standalone
+provides_hooks:
+  - pre_gateway_dispatch

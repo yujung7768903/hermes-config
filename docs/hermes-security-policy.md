@@ -57,6 +57,61 @@ security_guard.py의 원격 판정은 두 경로에 의존한다.
   파일 삭제 방어가 없는 것이다. 이 테스트 전에는 실사용으로 열면 안 된다.
 
 
+### 0-3. 게이트웨이 2개 동시 구동 [2026-08-09 추가]
+
+이 문서의 방어 기술은 전부 **hermes 계정 인스턴스 기준**이다.
+같은 서버에 ec2-user 계정 인스턴스가 **동시에 살아 있다**.
+
+  hermes   인스턴스 : PID 1949,  ~/.hermes/config.yaml,
+                      approvals.deny 33개, security_log.py 있음,
+                      security-filter(L3) 활성
+  ec2-user 인스턴스 : PID 47998, ~/.hermes/config.yaml,
+                      approvals.deny 17개, security_log.py 없음,
+                      L3 마스킹 없음 (plugins.enabled = deploy-log, teams-platform)
+
+/home/ec2-user/.hermes-migrated 가 /home/hermes/.hermes 를 가리키는 심볼릭
+링크로 남아 있다. 이관을 시도한 흔적이지만 ec2-user 쪽 .hermes 실체는 그대로
+있고, 게이트웨이도 그 실체를 쓰고 있다. **이관이 끝나지 않았다.**
+
+격리 디렉터리(private/ · hermes-workspace/ · hermes-readonly/)도 ec2-user
+홈에만 있고 hermes 홈에는 없다.
+
+**먼저 확인할 것**: 두 인스턴스가 같은 Slack/Teams 워크스페이스에 붙어 있는가.
+붙어 있다면 같은 메시지에 두 번 응답하거나, **약한 쪽(ec2-user)이 강한 쪽의
+차단을 우회하는 경로**가 된다. 양쪽 .env 의 Slack 앱 토큰을 대조하면 된다.
+
+강한 쪽을 아무리 조여도 약한 쪽이 열려 있으면 정책의 정본이 어느 쪽인지
+정해지지 않고, 나머지 결정이 전부 무의미해진다. ec2-user 인스턴스 정리가
+다른 모든 항목보다 앞선다.
+
+---
+
+### 0-4. L3 마스킹이 로드된 적이 없었다 [2026-08-09 추가]
+
+이 문서가 `[구현 완료]` 로 기술해 온 **L3(security-filter) 마스킹 23종은 한 번도
+동작하지 않았다.** 플러그인 코드는 정상인데 `plugin.yaml` 이 없었다.
+
+플러그인 로더는 `<root>/<plugin>/plugin.yaml` 또는
+`<root>/<category>/<plugin>/plugin.yaml` 이 있는 디렉터리만 발견한다 (depth 2 캡).
+security-filter 는 두 위치 어디에도 매니페스트가 없어서 **디스커버리 단계에서
+탈락**했고, `config.yaml` 의 `plugins.enabled` 에 이름이 있어도 로드할 대상이
+없었다. `.gitignore` 의 `!plugins/**/*.yaml` 때문에 파일이 있었다면 git 에
+추적됐을 것인데, 추적 목록에 deploy-log 것 하나뿐이었다.
+
+결과: AWS 키·Slack 토큰·JWT·PEM 블록·EC2 인스턴스 ID·사설 IP 등이 도구 결과에
+섞여 나왔을 때 **마스킹 없이 그대로 모델에 전달돼 왔다.**
+
+`plugins/security-filter/security-filter/plugin.yaml` 추가로 해소. 로컬
+hermes-agent v0.18.0 의 실제 로더로 검증했다 —
+`security-filter/security-filter enabled=True`, `transform_tool_result` 콜백 등록 확인.
+추가 전에는 둘 다 나오지 않았다.
+
+**교훈**: "코드가 있다" 와 "로드된다" 는 다르다. 이 문서의 `[구현 완료]` 표기는
+코드 존재만 근거로 삼았고 런타임 등록을 확인하지 않았다. 나머지 계층도 같은
+방식으로 재확인이 필요하다.
+
+---
+
 ### 0-2. 수정이 필요한 항목
 
   [완료 2026-08-06 3차] rm 차단을 전 플랫폼으로 이동 — is_remote() 의존 제거.
@@ -214,6 +269,10 @@ terminal 도구 없이도 파일이 삭제됨을 직접 확인했다.
   read_file / write_file / search_files / patch 는 realpath 기반 비교라
   정상 동작한다. security_guard.py 의 PRIVATE_PATTERNS 를 수정해야 한다.
 
+  [2026-08-09 정정] 수정 완료. PRIVATE_PATTERNS 는 이제 계정을 하드코딩하지 않고
+  rf"{re.escape(HOME)}/private\b" 를 쓴다 (security_guard.py 규칙 2).
+  계정이 바뀌어도 따라간다. 위 "오류" 항목은 해소된 상태다.
+
 접근 거부 메시지 예시:
   [보안 정책] 접근 금지 디렉토리입니다.
   접근이 필요하다면 ~/hermes-workspace/ 로 복사 후 이용하세요.
@@ -252,9 +311,31 @@ terminal 도구 없이도 파일이 삭제됨을 직접 확인했다.
     '*\n\n      pkill'
     '\n\n      killall *'
 
+  [2026-08-09 정정] 셋 다 죽은 게 아니라 2개다. fnmatch 는 * 가 개행에도
+  매칭되므로 '*\nkill *' 은 `cd /tmp\nkill 1234` 를 정상적으로 잡는다.
+  실제로 무력한 것은 비대칭인 둘이다.
+    '*\npkill'      뒤에 * 가 없어 `a\npkill -9` 미차단
+    '\nkillall *'   앞에 * 가 없어 `a\nkillall x` 미차단
+  개행 패턴이 필요한 이유는 '* kill *' 이 개행 뒤 형태를 못 잡기 때문이다
+  (개행 앞에 공백이 없다).
+
+  수정 완료. rm 그룹과 같은 "\n" 표기로 통일했다. 같은 점검에서 명령 끝에
+  오는 형태('… | xargs pkill')가 전부 통과하던 것도 발견해 '* kill' ·
+  '* pkill' · '* killall' 을 추가했다 — rm 그룹의 '* rm' 과 같은 이유다.
+  회귀 방지: tests/test_kill_block.py
+
   'aws *' / '* aws *' 는 명령 문자열 어디에나 매칭된다. AWS CLI 호출이
   아닌 명령도 차단한다. agent.log에 히어독으로 문서를 쓰는 명령이
   '* aws *' 로 차단된 사례가 있다. 명령 시작 위치로 한정해야 한다.
+
+  [2026-08-09 정정] 수정 완료. fnmatch 로는 명령 경계를 표현할 수 없으므로
+  '* aws *' 를 deny 에서 빼고, 판정을 L2 로 옮겼다. security_guard 규칙 3 에
+  줄 시작 · ; · | · & · ( · 백틱 · 개행 뒤의 aws 를 잡는 정규식을 넣었고
+  sudo·env·VAR= 프리픽스도 포함한다. deny 에 남은 'aws *' 는 훅이 fail-open
+  될 때의 2차 방어선이다.
+  남는 오탐: 히어독 본문에서 줄이 "aws " 로 시작하는 경우. 개행 뒤를 안 보면
+  `cmd1\naws s3 ls` 가 통과하므로 이쪽을 택했다.
+  회귀 방지: tests/test_aws_block.py
 
 계층 B — security_guard.py hook (pre_tool_call)
   terminal 도구 차단:
@@ -431,7 +512,7 @@ terminal 도구 없이도 파일이 삭제됨을 직접 확인했다.
 |------|------|------|---------------|
 | 1 | 메시지 수신 | Slack/Teams/CLI 등 채널에서 사용자 메시지 수신 | - |
 | 2 | Gateway (Platform Adapter) | 채널별 어댑터가 메시지를 Hermes 내부 형식으로 변환 | platform_toolsets 화이트리스트 적용 |
-| 2.5 | pre_gateway_dispatch hook | 메시지를 모델에 넘기기 직전 hook 체인 실행. 반환값으로 통과·무시·교체 결정 | 지점 존재, 차단 로직 없음 (LG) |
+| 2.5 | pre_gateway_dispatch hook | 메시지를 모델에 넘기기 직전 hook 체인 실행. 반환값으로 통과·무시·교체 결정 | **[2026-08-09] prompt-gate 플러그인으로 구현. 기본 observe 모드** (LG) |
 | 3 | Hermes AI (모델 판단) | LLM이 요청을 해석하고 어떤 도구를 호출할지 결정 | 없음 (날 메시지가 그대로 도달) |
 | 4 | model_tools.py | 도구 호출 직전 처리 단계 | approvals.deny 패턴 매칭 (L1) |
 | 5 | pre_tool_call hook | 도구 실행 직전 hook 체인 실행 | security_guard.py 차단 로직 실행 (L2) |
@@ -456,7 +537,7 @@ terminal 도구 없이도 파일이 삭제됨을 직접 확인했다.
 |------|--------|-----------|-------------|-----------|-------------------|-----------||
 | LK | 커널 하네스 동결 | systemd drop-in `10-readonly-harness.conf` (`ReadOnlyPaths=`) | 게이트웨이와 그 자식 프로세스 전부 | 하네스 경로가 읽기전용 바인드 마운트로 올라와 쓰기 자체가 EROFS | 우회 불가. 해제에 root 필요하고 `NoNewPrivileges=true` 로 하위에서 sudo 불가 | 완료 |
 | L0 | Platform Toolsets 화이트리스트 | config.yaml `platform_toolsets` + `toolsets.py` | 채널별 설정 | 채널에 등록되지 않은 toolset은 도구 자체가 노출되지 않음 | 우회 불가 (설정 레벨) | 설정됨. **원격 채널에는 실효 없음** — hermes-slack이 코어 툴 전체를 포함 |
-| LG | 요청 화이트리스트 게이트 | config.yaml `hooks.pre_gateway_dispatch` (현재 등록된 훅 없음) | gateway 경유 채널. CLI·cron 통과 여부 미확인 | 모델 입력 직전 메시지를 검사해 `skip`(무시) 또는 `rewrite`(교체), 허용 시 통과 | hook이 dispatch를 막으면 모델 호출 자체가 없음 (미검증) | **미구현** — 지점만 존재. 계획: hermes-request-whitelist-plan.md |
+| LG | 요청 화이트리스트 게이트 | **플러그인** `plugins/prompt-gate/` (config.yaml `hooks:` 절이 아니다 — 아래 정정 참조) | gateway 인바운드 메시지 전용. **CLI·cron·ACP·internal event 는 지나지 않음** | 수행 가능한 8개 카테고리로 분류되는 요청만 통과. 나머지는 `rewrite` 로 원문 폐기 후 안내 문구 대체 | 원문이 모델에 도달하지 않음 | **[2026-08-09] 구현. 기본 `mode: observe`** — 분류·로깅만 하고 통과시킨다. 실사용 관측 후 `enforce` 로 전환 |
 | L1 | Approvals Deny | config.yaml `approvals.deny` | 전 플랫폼 | 패턴 매칭된 명령은 모델 판단과 무관하게 실행 거부 | 우회 불가 | 완료 |
 | L2 | pre_tool_call Hook | security_guard.py | 설정에 따라 전 플랫폼 또는 원격 한정 | 도구 호출 직전 인자를 검사해 차단 또는 허용 | hook이 deny 반환하면 실행 안 됨 | 완료 |
 | L3 | transform_tool_result | security-filter 플러그인 | 전 플랫폼 | 도구 결과에서 민감 정보 정규식 마스킹 | - | 완료 |
@@ -605,7 +686,7 @@ pre_tool_call hook은 Hermes AI가 도구를 호출하는 순간에만 개입한
 | cron 스크립트 | Hermes cron 또는 시스템 cron이 독립적으로 실행하는 스크립트 |
 | 백그라운드 프로세스 | 이미 실행 중인 프로세스가 내부적으로 호출하는 명령 |
 | Gateway 내부 동작 | Hermes gateway가 직접 실행하는 subprocess.run 등 내부 로직 |
-| 모델 판단 전 입력 | 사용자 메시지 자체에 대한 필터링 없음 (프롬프트 인젝션 방어 미구현). pre_tool_call 로는 도달할 수 없는 영역이고, pre_gateway_dispatch(LG)가 이 자리를 채울 지점이다 |
+| 모델 판단 전 입력 | **[2026-08-09 정정] LG(prompt-gate)로 채워졌다.** 단 기본이 observe 모드라 아직 차단하지 않고, gateway 인바운드 경로에만 걸린다. CLI·cron·슬래시 커맨드는 여전히 이 필터 밖이다 |
 
 
 ### 6-7. hook 밖에 있는 방어 장치 [2026-08-06 추가]

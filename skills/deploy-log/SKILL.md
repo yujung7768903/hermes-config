@@ -26,8 +26,8 @@ metadata:
 
 ```bash
 ~/.hermes/hermes-agent/venv/bin/python3 << 'PYEOF'
-import sys
-sys.path.insert(0, '/home/ec2-user/.hermes/plugins/deploy-log')
+import os, sys
+sys.path.insert(0, os.path.expanduser('~/.hermes/plugins/deploy-log'))
 from db import search_deploys, recent_deploys
 
 # 키워드 검색 (서비스명, 내용, 유형 모두 검색)
@@ -42,8 +42,8 @@ PYEOF
 
 ```bash
 ~/.hermes/hermes-agent/venv/bin/python3 << 'PYEOF'
-import sys
-sys.path.insert(0, '/home/ec2-user/.hermes/plugins/deploy-log')
+import os, sys
+sys.path.insert(0, os.path.expanduser('~/.hermes/plugins/deploy-log'))
 from db import recent_deploys
 
 rows = recent_deploys(limit=10)
@@ -61,8 +61,8 @@ PYEOF
 
 ```bash
 ~/.hermes/hermes-agent/venv/bin/python3 << 'PYEOF'
-import sys, sqlite3
-sys.path.insert(0, '/home/ec2-user/.hermes/plugins/deploy-log')
+import os, sys, sqlite3
+sys.path.insert(0, os.path.expanduser('~/.hermes/plugins/deploy-log'))
 from db import DB_PATH
 
 service = "AMS"  # ← 서비스명으로 교체
@@ -82,8 +82,8 @@ PYEOF
 
 ```bash
 ~/.hermes/hermes-agent/venv/bin/python3 << 'PYEOF'
-import sys, sqlite3
-sys.path.insert(0, '/home/ec2-user/.hermes/plugins/deploy-log')
+import os, sys, sqlite3
+sys.path.insert(0, os.path.expanduser('~/.hermes/plugins/deploy-log'))
 from db import DB_PATH
 
 con = sqlite3.connect(str(DB_PATH))

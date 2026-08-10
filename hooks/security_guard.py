@@ -42,7 +42,19 @@ if not platform:
 
 REMOTE_PLATFORMS = {"slack", "teams"}
 
+
 def is_remote():
+    """현재 어떤 규칙도 이 함수에 의존하지 않는다 — 판정을 신뢰할 수 없기 때문이다.
+
+    gateway 는 platform 을 contextvars 로 바인딩하는데 훅은 별도 subprocess 라
+    HERMES_SESSION_PLATFORM 을 상속받지 못하고, session_id 도 실제로는
+    "20260805_060149_1a94bc" 형식이라 파싱도 실패한다. 관측된 로그의 platform=
+    은 전부 빈 값이었다.
+
+    채널별 정책을 다시 넣으려면 먼저 platform 전달 경로부터 고쳐야 한다.
+    그때까지 이 함수는 쓰지 않는다. 감사 로그에는 platform 값을 그대로 남겨서
+    (block() 참조) 판정이 복구됐는지 확인할 수 있게 해둔다.
+    """
     return platform in REMOTE_PLATFORMS
 
 def block(message):
@@ -70,11 +82,12 @@ def block(message):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# [규칙 1] 파일 삭제 차단
-# terminal 삭제 명령은 전 플랫폼(CLI 포함) 차단.
+# [규칙 1] 파일 삭제 차단 (모든 플랫폼)
+# terminal 삭제 명령과 patch Delete File 지시어를 전 플랫폼(CLI 포함) 차단한다.
 #   플랫폼 한정으로 두면 platform 감지 실패(HERMES_SESSION_PLATFORM 미전달,
 #   session_id 형식 불일치) 시 차단이 통째로 무력화되므로 판정에 의존하지 않는다.
-# patch Delete File 지시어는 Slack/Teams 한정 유지.
+#   patch Delete File 은 원래 is_remote() 안에 있었고 그래서 한 번도 발동한 적이
+#   없었다. terminal rm 과 같은 이유로 밖으로 꺼냈다.
 # ─────────────────────────────────────────────────────────────────────────────
 
 # terminal: rm, rmdir, shred, unlink, truncate, find -delete 등
@@ -97,23 +110,18 @@ if tool_name == "terminal":
                 f"삭제가 필요하면 사용자가 직접 실행해야 합니다."
             )
 
-if is_remote():
+# patch: Delete File 지시어 차단
+if tool_name == "patch":
+    patch_content = str(tool_input.get("patch", ""))
+    if "*** Delete File:" in patch_content:
+        block(
+            f"[보안 정책] 파일 삭제는 허용되지 않습니다.\n"
+            f"(patch Delete File 지시어 차단)\n"
+            f"삭제가 필요하면 사용자가 직접 실행해야 합니다."
+        )
 
-    # patch: Delete File 지시어 차단
-    if tool_name == "patch":
-        patch_content = str(tool_input.get("patch", ""))
-        if "*** Delete File:" in patch_content:
-            block(
-                f"[보안 정책] {platform.upper()} 세션에서는 파일 삭제가 허용되지 않습니다.\n"
-                f"(patch Delete File 지시어 차단)\n"
-                f"파일 삭제가 필요하다면 CLI 세션에서 직접 실행해 주세요."
-            )
-
-    # write_file: 파일을 빈 내용으로 덮어쓰는 삭제 패턴은 허용
-    # (write_file 자체는 삭제가 아니므로 허용)
-
-    # 스킬을 통한 삭제도 위 terminal/patch 차단으로 커버됨
-    # (스킬은 결국 terminal이나 patch 도구를 호출하므로)
+# write_file 로 빈 내용을 덮어쓰는 것은 삭제가 아니므로 허용한다.
+# 스킬을 통한 삭제도 결국 terminal·patch 를 호출하므로 위 두 차단으로 커버된다.
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -182,6 +190,15 @@ if tool_name == "terminal":
 # 인스턴스 ID, IP, AMI ID, hostname, IAM role, 토큰/키
 # ─────────────────────────────────────────────────────────────────────────────
 SENSITIVE_CMD_PATTERNS = [
+    # AWS CLI 실행 자체. config.yaml 의 '* aws *' 를 대체한다 —
+    # fnmatch 는 명령 경계를 못 봐서 `grep aws x`, `git commit -m "fix aws 문서"`,
+    # 히어독 문서 작성까지 차단했다. 여기서는 명령이 시작될 수 있는 위치
+    # (줄 시작 · ; · | · & · ( · 백틱 · 개행) 뒤의 aws 만 잡고, sudo·env·VAR=x
+    # 프리픽스는 통과시키지 않는다.
+    # 남는 오탐: 히어독 본문에서 줄이 "aws " 로 시작하는 경우. 개행 뒤를 안 보면
+    # `cmd1\naws s3 ls` 가 그대로 통과하므로, 이쪽을 택했다.
+    (r"(?:^|[;|&(`\n])\s*(?:sudo\s+|env\s+|\w+=\S+\s+)*aws\s",
+                                          "AWS CLI 실행"),
     (r"169\.254\.169\.254",               "EC2 인스턴스 메타데이터(IMDS) 직접 접근"),
     (r"X-aws-ec2-metadata-token",         "EC2 IMDSv2 토큰 발급"),
     (r"\baws\s+ec2\s+describe-instances?\b", "EC2 인스턴스 정보 조회 (인스턴스ID/IP/AMI ID 포함)"),
