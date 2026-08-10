@@ -156,6 +156,18 @@ ADMIN_GATE = [
 ]
 ADMIN_GATE_RE = [(re.compile(p, re.IGNORECASE), c) for p, c in ADMIN_GATE]
 
+# db_schema_query 화제어는 요청 표지와 **함께** 있을 때만 인정한다.
+# 화제어만으로 자르면 "아니 이건 데이터베이스 구조잖아" 같은 항의·언급까지 잡혀서,
+# 오차단을 당한 사용자가 그 사실을 신고하는 것조차 같은 규칙에 막힌다
+# (2026-08-10 실사례: 오답 지적 → 또 차단 → 또 오답, 3턴 반복).
+# agent_restart 패턴이 대상어와 명령형을 짝지어 오차단을 피하는 것과 같은 방식이다.
+# 표지가 없으면 백스톱만 건너뛰고 분류기로 간다 — 주 방어는 여전히 분류기다.
+DB_REQUEST_RE = re.compile(
+    r"(알려|보여|설명|정리|공유|출력|뽑아|말해|목록|리스트|궁금|확인해|"
+    r"어떻게\s*(돼|되|생겼|구성)|뭐(야|가)|무엇|줘|주세요|"
+    r"\b(show|list|describe|explain|what|which|tell|give)\b)",
+    re.IGNORECASE)
+
 # 인자 유무와 무관하게 관리자만 쓸 수 있는 커맨드.
 # 주의: 코어가 게이트웨이 슬래시 커맨드(/restart·/yolo)를 이 훅보다 앞에서
 # 직접 처리한다면 여기까지 오지 않는다 (docs/hermes-request-whitelist-plan.md
@@ -185,6 +197,9 @@ SYSTEM_PROMPT = f"""너는 요청 분류기다. 대화 상대가 아니다.
 판정 규칙:
 - db_schema_query 는 코드 설명 요청과 겹칠 수 있다. **결과물이 테이블·컬럼·스키마
   목록이면** service_explain 이 아니라 db_schema_query 다.
+- 반대도 성립한다. **결과물이 API 경로·호출 흐름·모듈 관계·코드 위치면**
+  service_explain 이다. 데이터를 저장·조회한다는 말이 들어 있다는 이유만으로
+  db_schema_query 로 밀지 마라 (예: "댓글 저장은 어느 API 를 타?" → service_explain).
 - 허용·차단이 섞인 다중 의도 요청은 **가장 위험한 쪽**으로 판정한다.
 - 결과물이 "파일·설정·데이터의 변경"이면 차단, "텍스트 답변"이면 허용 쪽이다.
 - 확실하지 않으면 unknown 으로 판정한다. 추측해서 허용하지 마라.
@@ -360,7 +375,11 @@ def register(ctx):
         payload = ""
         if history:
             payload += ("<context>\n같은 대화의 직전 발화다. 요청이 여러 메시지로 "
-                        "쪼개졌을 수 있으니 이어지는 의도 전체로 판정하라.\n"
+                        "쪼개졌을 수 있으니, <request> 가 혼자서는 뜻이 통하지 않는 "
+                        "조각이면 이어지는 의도 전체로 판정하라.\n"
+                        "반대로 <request> 가 그 자체로 완결된 다른 주제면 이 "
+                        "<context> 는 무시하라 — 앞에서 무엇을 얘기했든 새 주제의 "
+                        "분류를 그쪽으로 끌고 가지 마라.\n"
                         + "\n".join(history) + "\n</context>\n")
         payload += "<request>\n" + text + "\n</request>"
         fut = _POOL.submit(_call_llm, payload)
@@ -456,8 +475,13 @@ def register(ctx):
                     return decide(cat, "regex")
 
             for pat, cat in ADMIN_GATE_RE:
-                if pat.search(visible):
-                    return decide(cat, "regex")
+                if not pat.search(visible):
+                    continue
+                if cat == "db_schema_query" and not DB_REQUEST_RE.search(visible):
+                    # 화제어만 있고 요청 표지가 없다 — 언급·항의일 수 있다.
+                    # 백스톱을 건너뛰고 분류기 판정에 맡긴다 (DB_REQUEST_RE 주석 참조)
+                    continue
+                return decide(cat, "regex")
 
             if mid and mid in seen:
                 return decide(seen[mid], "cache")
