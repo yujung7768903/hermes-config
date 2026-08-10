@@ -358,8 +358,15 @@ def register(ctx) -> None:
         _patch()
         return None
 
+    hooked = []
     for hook in ("pre_gateway_dispatch", "on_session_start"):
         try:
             ctx.register_hook(hook, _retry)
+            hooked.append(hook)
         except Exception as exc:  # pragma: no cover
             logger.warning("[slack-table] %s 훅 등록 실패: %s", hook, exc)
+
+    # 기동 로그를 반드시 한 줄 남긴다. 적용 로그는 어댑터가 뜬 뒤에야 찍히므로,
+    # 이 줄이 없으면 "플러그인이 안 실려서 조용한 것" 과 "아직 적용 전이라
+    # 조용한 것" 을 로그로 구분할 수 없다.
+    logger.info("[slack-table] 등록됨 — 재시도 훅: %s", ", ".join(hooked) or "(없음)")
