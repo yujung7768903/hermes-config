@@ -4,6 +4,10 @@
 > 작성일: 2026-07-31
 > 최종 검증: 2026-08-06 (실제 파일 코드 기준으로 전면 재검증 — 미구현 항목 다수 완료 확인)
 > 개정: 2026-08-06 2차 (config.yaml·toolsets.py·security_guard.py·로그 대조. 아래 "0. 개정 요약" 참조)
+> 개정: 2026-08-10 (운영 서버 직접 확인 — 게이트웨이 프로세스·systemd·config·훅·플러그인·격리 디렉터리)
+>
+> 팀 공유용 요약: Confluence "Hermes 보안 정책"
+> https://hankookilbo.atlassian.net/wiki/spaces/8qbD515ZCKSn/pages/7227080967
 
 ---
 
@@ -57,7 +61,18 @@ security_guard.py의 원격 판정은 두 경로에 의존한다.
   파일 삭제 방어가 없는 것이다. 이 테스트 전에는 실사용으로 열면 안 된다.
 
 
-### 0-3. 게이트웨이 2개 동시 구동 [2026-08-09 추가]
+### 0-3. 게이트웨이 2개 동시 구동 [2026-08-09 추가 → 2026-08-10 해소]
+
+**[2026-08-10 정정] 해소됐다.** 서버 프로세스 목록에 `hermes gateway run` 은 hermes
+계정 1개뿐이다 (PID 100447). ec2-user 인스턴스는 종료됐고, 아래 "약한 쪽이 강한 쪽의
+차단을 우회하는 경로" 위험은 사라졌다. 정책의 정본은 hermes 계정 인스턴스다.
+
+`/home/ec2-user/.hermes` 실체와 `.hermes-migrated` 심볼릭 링크는 그대로 남아 있으나
+어떤 프로세스도 쓰지 않는다. 격리 디렉터리는 `/home/hermes/private` 이 생성됐고,
+`hermes-workspace/`·`hermes-readonly/` 는 여전히 ec2-user 홈에만 있다 — 훅 규칙 2 의
+차단 메시지가 안내하는 `~/hermes-workspace/` 가 hermes 홈에 없는 상태다.
+
+아래는 해소 전 기록이다.
 
 이 문서의 방어 기술은 전부 **hermes 계정 인스턴스 기준**이다.
 같은 서버에 ec2-user 계정 인스턴스가 **동시에 살아 있다**.
@@ -115,12 +130,16 @@ hermes-agent v0.18.0 의 실제 로더로 검증했다 —
 ### 0-2. 수정이 필요한 항목
 
   [완료 2026-08-06 3차] rm 차단을 전 플랫폼으로 이동 — is_remote() 의존 제거.
-         patch Delete File 차단은 여전히 원격 한정이라 미발동 상태다.
-  [높음] security_guard.py의 /home/ec2-user/private → /home/hermes/private
+  [완료 2026-08-10] patch Delete File 차단도 is_remote() 밖으로 나왔다.
+         security_guard.py 규칙 1 은 terminal·patch 모두 전 플랫폼 무조건 판정이다.
+  [완료 2026-08-09] security_guard.py 의 계정 하드코딩 제거 (PRIVATE_PATTERNS)
+  [완료 2026-08-09] approvals.deny 의 비대칭 개행 패턴 2개 수정
+  [완료 2026-08-09] 'aws *' 를 L2 정규식으로 이동, '* aws *' 는 deny 에서 제거
   [높음] 원격 채널 toolset을 좁힐지, full access를 유지하고 hook으로만
          통제할지 명시적으로 결정
-  [중간] approvals.deny의 죽은 패턴 3개 제거
-  [중간] 'aws *' 패턴을 명령 시작 위치로 한정 (현재 히어독 문서 작성도 차단)
+  [높음] 훅 규칙 2 가 안내하는 ~/hermes-workspace/ 가 hermes 홈에 없다.
+         디렉터리를 만들지, 안내 문구를 바꿀지 결정
+  [중간] LG(prompt-gate) enforce 전환 — 오차단 0 관측 후
   [낮음] L1 차단도 감사 로그에 기록
 
 ---
@@ -230,7 +249,8 @@ terminal 도구 없이도 파일이 삭제됨을 직접 확인했다.
   terminal 도구: rm, rmdir, shred, unlink, truncate, find -delete, find -exec rm
     → 전 플랫폼(CLI 포함). is_remote() 판정에 의존하지 않는다.
   patch 도구: *** Delete File: 지시어
-    → Slack/Teams 한정 (기존 유지)
+    → 전 플랫폼. [2026-08-10 정정] 원래 is_remote() 안에 있어 한 번도 발동하지
+      않았다. terminal 삭제 차단과 같은 이유로 밖으로 꺼냈다.
   approvals.deny: rm 을 명령 토큰으로 잡는 패턴 11개 (경로·옵션별 옛 패턴 17개 대체)
     → 훅이 미실행·예외로 fail-open 되는 경우의 2차 방어선
 
@@ -245,7 +265,11 @@ terminal 도구 없이도 파일이 삭제됨을 직접 확인했다.
 
   [2026-08-06 3차] 위 미검증 사유를 해소했다. terminal 삭제 차단을
   is_remote() 밖으로 빼서 platform 값이 비어 있어도 발동한다.
-  patch Delete File 차단은 여전히 is_remote() 에 의존하므로 미발동 상태다.
+
+  [2026-08-10] patch Delete File 차단도 is_remote() 밖으로 나왔다. 서버의
+  security_guard.py 에서 is_remote() 를 참조하는 규칙은 하나도 없고, 함수
+  독스트링이 "현재 어떤 규칙도 이 함수에 의존하지 않는다" 를 명시한다.
+  채널별 정책을 다시 넣으려면 platform 전달 경로부터 고쳐야 한다.
 
 
 ### [구현 완료] 규칙 2 — ~/private 접근 차단 (전 플랫폼)
@@ -398,8 +422,10 @@ terminal 도구 없이도 파일이 삭제됨을 직접 확인했다.
 방식: security_log.py (security_guard.py 및 security-filter 플러그인 공통 사용)
 
 기록 대상:
-  BLOCKED  — pre_tool_call hook에서 차단된 이벤트
-  MASKED   — transform_tool_result에서 마스킹된 이벤트
+  BLOCKED             — pre_tool_call hook(L2)에서 차단된 이벤트
+  MASKED              — transform_tool_result(L3)에서 마스킹된 이벤트
+  BLOCKED_PROMPT      — LG(prompt-gate)에서 실제로 차단한 요청
+  WOULD_BLOCK_PROMPT  — LG observe 모드에서 차단 대상으로 분류했으나 통과시킨 요청
 
 로그 위치: ~/.hermes/logs/security/YYYY-MM-DD.log
 보관 기간: 14일 자동 로테이션
@@ -433,6 +459,14 @@ terminal 도구 없이도 파일이 삭제됨을 직접 확인했다.
 
 /home/hermes/.hermes/plugins/security-filter/security-filter/__init__.py
   역할: transform_tool_result 플러그인. 도구 결과 민감 정보 마스킹 (규칙 3 계층C).
+
+/home/hermes/.hermes/plugins/prompt-gate/__init__.py   [2026-08-10 추가]
+  역할: pre_gateway_dispatch 플러그인. 인바운드 요청을 21개 카테고리로 분류해
+        허용 8종·관리자 전용 2종만 통과시킨다 (LG). 매니페스트는 같은
+        디렉터리의 plugin.yaml.
+        security-filter 는 한 단계 더 들어간 plugins/security-filter/
+        security-filter/ 에 매니페스트가 있다 — 로더가 깊이 2까지 훑기 때문에
+        두 배치 모두 발견된다.
 
 /home/hermes/.hermes/config.yaml
   역할: approvals.deny 블록 (규칙 3 계층A), platform_toolsets, plugins.enabled 설정.
@@ -521,10 +555,11 @@ terminal 도구 없이도 파일이 삭제됨을 직접 확인했다.
 | 8 | 응답 반환 | 결과를 채널로 전송 | - |
 
 ※ 3단계(모델 판단) 이전 개입 지점은 2.5단계(pre_gateway_dispatch)다.
-  지점은 존재하지만 현재 등록된 훅이 없다.
-  따라서 악의적 프롬프트가 모델에 도달하는 것 자체를 막는 레이어는 미구현이다.
-  이 지점을 화이트리스트 게이트로 쓰는 계획은
-  hermes-request-whitelist-plan.md 참조.
+  [2026-08-10 정정] 이 지점은 prompt-gate 플러그인으로 채워졌다. 원래 여기 있던
+  "등록된 훅이 없다 / 미구현" 서술은 LG 도입 전 상태였다.
+  현재는 mode: observe 라 분류·기록만 하고 통과시키며, 정규식 선판정
+  (enforce_hard_block: true)에 걸린 것만 실제로 차단한다.
+  설계 배경은 hermes-request-whitelist-plan.md 참조.
 
   [2026-08-06 3차 정정] 이 표에는 원래 2.5단계가 없었고 "3단계 이전에는
   보안 개입 지점이 없다"고 적혀 있었다. 사실이 아니다 — 지점은 처음부터
@@ -537,7 +572,7 @@ terminal 도구 없이도 파일이 삭제됨을 직접 확인했다.
 |------|--------|-----------|-------------|-----------|-------------------|-----------||
 | LK | 커널 하네스 동결 | systemd drop-in `10-readonly-harness.conf` (`ReadOnlyPaths=`) | 게이트웨이와 그 자식 프로세스 전부 | 하네스 경로가 읽기전용 바인드 마운트로 올라와 쓰기 자체가 EROFS | 우회 불가. 해제에 root 필요하고 `NoNewPrivileges=true` 로 하위에서 sudo 불가 | 완료 |
 | L0 | Platform Toolsets 화이트리스트 | config.yaml `platform_toolsets` + `toolsets.py` | 채널별 설정 | 채널에 등록되지 않은 toolset은 도구 자체가 노출되지 않음 | 우회 불가 (설정 레벨) | 설정됨. **원격 채널에는 실효 없음** — hermes-slack이 코어 툴 전체를 포함 |
-| LG | 요청 화이트리스트 게이트 | **플러그인** `plugins/prompt-gate/` (config.yaml `hooks:` 절이 아니다 — 아래 정정 참조) | gateway 인바운드 메시지 전용. **CLI·cron·ACP·internal event 는 지나지 않음** | 수행 가능한 8개 카테고리로 분류되는 요청만 통과. 나머지는 `rewrite` 로 원문 폐기 후 안내 문구 대체 | 원문이 모델에 도달하지 않음 | **[2026-08-09] 구현. 기본 `mode: observe`** — 분류·로깅만 하고 통과시킨다. 실사용 관측 후 `enforce` 로 전환 |
+| LG | 요청 화이트리스트 게이트 | **플러그인** `plugins/prompt-gate/` (config.yaml `hooks:` 절이 아니다 — 아래 정정 참조) | gateway 인바운드 메시지 전용. **CLI·cron·ACP·internal event 는 지나지 않음** | 허용 8종 + 관리자 전용 2종으로 분류되는 요청만 통과. 나머지 11종은 원문을 폐기(`skip`)하고 차단 사유는 게이트웨이가 사용자에게 직접 보낸다 (`on_block: notice`) | 원문이 모델에 도달하지 않음 | **[2026-08-10 확인] `mode: observe`** — 분류·로깅만 하고 통과시키되 `enforce_hard_block: true` 로 정규식 선판정 히트는 실차단. 오차단 0 관측 후 `enforce` 전환 |
 | L1 | Approvals Deny | config.yaml `approvals.deny` | 전 플랫폼 | 패턴 매칭된 명령은 모델 판단과 무관하게 실행 거부 | 우회 불가 | 완료 |
 | L2 | pre_tool_call Hook | security_guard.py | 설정에 따라 전 플랫폼 또는 원격 한정 | 도구 호출 직전 인자를 검사해 차단 또는 허용 | hook이 deny 반환하면 실행 안 됨 | 완료 |
 | L3 | transform_tool_result | security-filter 플러그인 | 전 플랫폼 | 도구 결과에서 민감 정보 정규식 마스킹 | - | 완료 |
@@ -564,7 +599,17 @@ L2 규칙 4(SOUL.md 자기수정 차단)와 L1 의 `*soul.md*` 패턴은 LK 가 
 검증: `scripts/verify_harness_readonly.sh` 를 서버에서 실행한다. 실행 중인 게이트웨이의
 마운트 네임스페이스에 직접 들어가 확인하므로 설정이 아니라 실제 적용 상태를 본다.
 
+  [2026-08-10 검증] PASS. 드롭인은 `/etc/systemd/system/hermes-gateway.service.d/`
+  에 설치돼 있고, 동결 대상 10경로 전부 `Read-only file system`, 런타임 5경로
+  (`cron/`·`logs/`·`sessions/`·`cache/`·최상위) 쓰기 정상, 게이트웨이 프로세스
+  `NoNewPrivs: 1`. 설정이 아니라 구동 중인 PID 에서 확인한 결과다.
+
 ### 6-3. L1 — Approvals Deny 차단 목록
+
+[2026-08-10 확인] 서버 `config.yaml` 의 `approvals.deny` 는 68개다. 그룹별 개수는
+프로세스 종료 12, rm 11, SOUL.md 15, 배치(cron·crontab·systemd-run·timer·at) 18,
+jobs.json 6, AWS 2(`aws *`·IMDSv2 토큰 헤더), IMDS 주소 1, chmod/chown 3.
+아래 표는 그룹 단위 요약이고 개별 패턴은 `config.yaml` 이 정본이다.
 
 | 패턴 | 차단 이유 | 적용 범위 |
 |------|-----------|-----------|
@@ -593,7 +638,7 @@ L2 규칙 4(SOUL.md 자기수정 차단)와 L1 의 `*soul.md*` 패턴은 LK 가 
 |---------|-------------|-----------|-----------|-------------|
 | R1-1 | 전 플랫폼 | terminal | `rm`, `rmdir`, `shred`, `unlink`, `truncate` 포함 | [보안 정책] 파일 삭제 명령은 허용되지 않습니다. |
 | R1-2 | 전 플랫폼 | terminal | `find ... -delete` 또는 `find ... -exec rm` 패턴 | 동일 |
-| R1-3 | Slack/Teams (원격) | patch | `*** Delete File:` 지시어 포함 | [보안 정책] 원격 채널에서 파일 삭제 명령은 허용되지 않습니다. |
+| R1-3 | 전 플랫폼 | patch | `*** Delete File:` 지시어 포함 | [보안 정책] 파일 삭제는 허용되지 않습니다. (patch Delete File 지시어 차단) |
 | R2-1 | 전 플랫폼 | read_file | path가 `~/private` 하위 | [보안 정책] 접근 금지 디렉토리입니다. ~/hermes-workspace/ 로 복사 후 이용하세요. |
 | R2-2 | 전 플랫폼 | write_file | path가 `~/private` 하위 | 동일 |
 | R2-3 | 전 플랫폼 | search_files | path가 `~/private` 하위 | 동일 |

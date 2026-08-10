@@ -14,6 +14,11 @@
 >
 > 구현 상태의 정본은 `hermes-security-policy.md` 다. 이 문서는 조직 차원의
 > 운영 정책만 다룬다.
+>
+> **[2026-08-10 추가]** 팀 공유용 요약을 Confluence 에 올렸다 —
+> [Hermes 보안 정책](https://hankookilbo.atlassian.net/wiki/spaces/8qbD515ZCKSn/pages/7227080967).
+> 같은 점검에서 아래 "OS 격리" 의 nologin·sudo 서술이 확인되지 않았고,
+> 게이트웨이 중복 구동은 해소됐다.
 
 ---
 
@@ -40,6 +45,16 @@
 - SSH 로그인 비허용 (nologin)
 - sudo 권한 없음
 - ec2-user는 관리자 전용으로 유지, hermes 유저와 완전 분리
+
+> **[2026-08-10 정정]** `getent passwd hermes` 결과 로그인 셸이 `/bin/bash` 다.
+> "nologin" 서술과 맞지 않는다. SSH 로그인이 실제로 막혀 있는지(authorized_keys·
+> 비밀번호·sshd 제한)와 sudoers 등록 여부는 이번 점검에서 확인하지 못했으므로,
+> 위 두 줄은 **미검증 상태로 취급한다.**
+>
+> 다만 게이트웨이 하위 프로세스의 권한 상승은 별도로 막혀 있다 — 유닛의
+> `NoNewPrivileges=true` 로 `NoNewPrivs: 1` 이 걸린 것을 구동 중인 PID 에서
+> 확인했다. 에이전트가 도구로 sudo 를 호출하는 경로는 계정 권한과 무관하게
+> 차단된다.
 - systemd 서비스로 실행 (hermes-gateway.service)
   - 서비스 파일: /etc/systemd/system/hermes-gateway.service
   - 재시작: ec2-user가 직접 서버 접근하여 수행 (추후 슬랙 연동 고려)
@@ -76,18 +91,17 @@
 
 ### 명령 차단 (security_guard.py 훅)
 
-현재 적용 중:
+현재 적용 중 (2026-08-10 서버 확인):
 
 - 파일 삭제 명령(rm 계열) 전 플랫폼 차단 — CLI 포함. approvals.deny 와 이중 차단
+- patch `*** Delete File:` 지시어 전 플랫폼 차단
 - SOUL.md 수정 차단 — 읽기만 허용. 갱신은 관리자 로컬 수정 → git push → pull 만
+- 배치(크론 잡) 등록·변경 차단 — 등록 행위를 막는다. 조회는 허용
 - ~/private 디렉토리 접근 차단
 - EC2 메타데이터(169.254.169.254) 직접 접근 차단
 - AWS STS, IAM 조회 차단
 - AWS 자격증명 직접 출력 차단
-
-결정됨 (미구현):
-
-- aws CLI 전체 차단 (모든 서브커맨드)
+- aws CLI 전체 차단 — 명령 시작 위치 판정 (deny 는 2차 방어선)
 
 > **[2026-08-09 정정] 구현 완료.** `config.yaml` 의 `approvals.deny` 에 `aws *`,
 > `security_guard.py` 규칙 3 에 명령 경계 정규식이 있다. 원래 함께 있던
@@ -177,21 +191,36 @@
 
 ## 현재 서버 구조
 
+2026-08-10 서버 확인 기준이다.
+
+```text
+/home/ec2-user/                  # 관리자 유저 (hermes 접근 불가)
+│   ├── .hermes/                 # 이관 전 설정 실체. 쓰는 프로세스 없음
+│   ├── .hermes-migrated         # /home/hermes/.hermes 심볼릭 링크
+│   ├── hermes-workspace/        # 빈 디렉터리. hermes 홈에는 없다
+│   └── hermes-readonly/         # 빈 디렉터리. hermes 홈에는 없다
+│
+├── /home/hermes/                # hermes 에이전트 유저
+│   ├── .hermes/                 # Hermes 런타임·설정·스킬·플러그인
+│   │   ├── .env                 # 민감 정보 (권한 600)
+│   │   ├── config.yaml          # 에이전트 설정. LK 로 읽기전용
+│   │   ├── SOUL.md              # 정체성 정의. LK 로 읽기전용
+│   │   ├── hooks/               # 보안 훅 (security_guard.py·security_log.py)
+│   │   ├── plugins/             # security-filter(L3)·prompt-gate(LG) 등
+│   │   ├── scripts/             # 검증·리포트 스크립트
+│   │   ├── skills/              # 스킬 디렉터리
+│   │   ├── memories/            # 장기 컨텍스트
+│   │   ├── docs/                # 이 문서 포함 정책 문서
+│   │   ├── logs/security/       # 감사 로그 (14일 로테이션). LK 제외
+│   │   └── cron/jobs.json       # 스케줄러 상태. LK 제외 — L1·L2 가 등록 차단
+│   ├── private/                 # 훅 규칙 2 로 접근 전면 차단
+│   └── work/                    # 작업 디렉터리
+│
+├── /opt/uv/                     # Python 런타임 (공용)
+└── /etc/systemd/system/
+    ├── hermes-gateway.service   # 서비스 유닛
+    └── hermes-gateway.service.d/10-readonly-harness.conf   # LK 하네스 동결
 ```
-/home/ec2-user/          관리자 유저 (hermes 접근 불가)
-  .hermes/               기존 설정 백업용 (이관 완료 후 보존)
 
-/home/hermes/            hermes 에이전트 유저
-  .hermes/               Hermes 런타임, 설정, 스킬, 플러그인
-    .env                 민감 정보 (권한 600)
-    config.yaml          에이전트 설정
-    hooks/               보안 훅 (security_guard.py)
-    skills/              스킬 디렉토리
-    plugins/             플러그인 디렉토리
-    docs/                이 문서 포함 정책 문서
-  work/                  개발 작업 디렉토리 (git 관리)
-
-/opt/uv/                 Python 런타임 (공용, hermes 의존성 없음)
-/etc/systemd/system/hermes-gateway.service   서비스 파일
-
-```
+게이트웨이는 hermes 계정 인스턴스 1개만 구동한다. ec2-user 인스턴스는 종료됐고
+`.hermes` 실체와 심볼릭 링크만 잔존한다.
