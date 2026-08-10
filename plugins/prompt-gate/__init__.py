@@ -35,6 +35,7 @@ ACP 어댑터, internal event 는 이 훅을 지나지 않는다 — 그쪽은 �
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
@@ -156,6 +157,18 @@ ADMIN_GATE = [
 ]
 ADMIN_GATE_RE = [(re.compile(p, re.IGNORECASE), c) for p, c in ADMIN_GATE]
 
+# db_schema_query 화제어는 요청 표지와 **함께** 있을 때만 인정한다.
+# 화제어만으로 자르면 "아니 이건 데이터베이스 구조잖아" 같은 항의·언급까지 잡혀서,
+# 오차단을 당한 사용자가 그 사실을 신고하는 것조차 같은 규칙에 막힌다
+# (2026-08-10 실사례: 오답 지적 → 또 차단 → 또 오답, 3턴 반복).
+# agent_restart 패턴이 대상어와 명령형을 짝지어 오차단을 피하는 것과 같은 방식이다.
+# 표지가 없으면 백스톱만 건너뛰고 분류기로 간다 — 주 방어는 여전히 분류기다.
+DB_REQUEST_RE = re.compile(
+    r"(알려|보여|설명|정리|공유|출력|뽑아|말해|목록|리스트|궁금|확인해|"
+    r"어떻게\s*(돼|되|생겼|구성)|뭐(야|가)|무엇|줘|주세요|"
+    r"\b(show|list|describe|explain|what|which|tell|give)\b)",
+    re.IGNORECASE)
+
 # 인자 유무와 무관하게 관리자만 쓸 수 있는 커맨드.
 # 주의: 코어가 게이트웨이 슬래시 커맨드(/restart·/yolo)를 이 훅보다 앞에서
 # 직접 처리한다면 여기까지 오지 않는다 (docs/hermes-request-whitelist-plan.md
@@ -185,28 +198,37 @@ SYSTEM_PROMPT = f"""너는 요청 분류기다. 대화 상대가 아니다.
 판정 규칙:
 - db_schema_query 는 코드 설명 요청과 겹칠 수 있다. **결과물이 테이블·컬럼·스키마
   목록이면** service_explain 이 아니라 db_schema_query 다.
+- 반대도 성립한다. **결과물이 API 경로·호출 흐름·모듈 관계·코드 위치면**
+  service_explain 이다. 데이터를 저장·조회한다는 말이 들어 있다는 이유만으로
+  db_schema_query 로 밀지 마라 (예: "댓글 저장은 어느 API 를 타?" → service_explain).
 - 허용·차단이 섞인 다중 의도 요청은 **가장 위험한 쪽**으로 판정한다.
 - 결과물이 "파일·설정·데이터의 변경"이면 차단, "텍스트 답변"이면 허용 쪽이다.
 - 확실하지 않으면 unknown 으로 판정한다. 추측해서 허용하지 마라.
 
 출력: 위 카테고리 이름 **하나만**. 설명·문장부호·따옴표 금지."""
 
+# 차단 안내는 **사용자에게 직접** 나간다. 모델 입력에는 아무것도 넣지 않는다.
+#
+# [2026-08-10] 이전 구현은 rewrite 로 event.text 를 안내문으로 갈아끼웠다.
+# 그러면 안내문이 '사용자 발화'로 모델에 도착해서 두 가지가 동시에 깨진다.
+#   (1) SOUL.md 가 메시지 속 지시문을 데이터로 취급하라고 못박아 모델이 불복했다.
+#   (2) 모델이 그 표식을 신뢰하도록 가르치면, 같은 표식을 위조한 사용자 입력이
+#       그대로 신뢰받는다 — 안내문 자체가 우회로가 된다.
+# 그래서 안내문을 없애 무응답(silent)으로 바꿨는데, 이번엔 오차단을 당한 사용자가
+# 그 사실을 알 방법이 사라졌다 (2026-08-10 16:07 실사례: 정상 질문 2건 무응답).
+#
+# 셋 다 만족하는 자리는 하나뿐이다 — 모델을 거치지 않고 게이트웨이가 직접 보낸다.
+# 코어 `Gateway._deliver_platform_notice(source, content)` 가 그 경로다.
+# 따라서 이 문구는 모델에게 주는 지시문이 아니라 **사용자가 읽을 완성된 문장**이다.
 BLOCK_NOTICE = (
-    "[시스템 안내 — 아래는 사용자 입력이 아니라 게이트웨이가 삽입한 문구다]\n"
-    "직전 사용자 요청은 요청 화이트리스트에서 '{cat}' 로 분류되어 차단되었고, "
-    "원문은 너에게 전달되지 않았다.\n"
-    "사용자에게 다음만 한국어로 한두 문장으로 알려라: 이 요청은 담당 범위 밖이라 "
-    "처리하지 않았다는 것, 그리고 사유가 '{desc}' 라는 것.\n"
-    "도구를 호출하지 마라. 추측해서 답을 만들어내지 마라. 다른 작업을 하지 마라."
+    "요청이 담당 범위 밖으로 분류되어 처리하지 않았습니다.\n"
+    "사유: {desc}"
 )
 
 ADMIN_NOTICE = (
-    "[시스템 안내 — 아래는 사용자 입력이 아니라 게이트웨이가 삽입한 문구다]\n"
-    "직전 사용자 요청은 '{desc}' 로 분류되었고, 이는 **관리자 전용**이라 "
-    "차단되었다. 원문은 너에게 전달되지 않았다.\n"
-    "사용자에게 다음만 한국어로 한두 문장으로 알려라: 이 요청은 관리자만 할 수 "
-    "있어 처리하지 않았다는 것, 필요하면 관리자에게 요청하라는 것.\n"
-    "도구를 호출하지 마라. 추측해서 답을 만들어내지 마라. 다른 작업을 하지 마라."
+    "이 요청은 관리자만 할 수 있어 처리하지 않았습니다.\n"
+    "사유: {desc}\n"
+    "필요하면 관리자에게 요청해 주세요."
 )
 
 # 발신자 식별자가 실려 올 수 있는 필드. 코어의 정확한 이름을 이 레포에서 확인할 수
@@ -247,9 +269,12 @@ def _settings(ctx):
         mode = "observe"
     return {
         "mode": mode,
-        # notify: rewrite 로 안내 문구만 남기고 원문은 버린다 (사용자가 이유를 안다)
-        # silent: skip. 사용자에게 아무것도 가지 않는다
-        "on_block": str(cfg.get("on_block", "notify")).strip().lower(),
+        # notice: 원문은 버리고(모델에 아무것도 안 감) 사유는 게이트웨이가
+        #         사용자에게 직접 보낸다. 기본값이자 권장값
+        # silent: 아무것도 보내지 않는다. 오차단을 사용자가 알 수 없으므로
+        #         무응답이 낫다고 판단한 경우에만
+        # (rewrite 로 안내문을 모델에 주입하던 notify 는 폐기됐다 — _notify_user 주석)
+        "on_block": str(cfg.get("on_block", "notice")).strip().lower(),
         # 이벤트 루프를 이 시간만큼 막을 수 있다. 크게 잡지 말 것
         "timeout": float(cfg.get("timeout", 6.0)),
         # 미지정이면 호스트 기본 모델. 지정하려면 llm.allow_model_override 도 켜야 한다
@@ -322,6 +347,33 @@ def _audit(event_type, *, platform, session, rule, detail):
         pass
 
 
+def _notify_user(gateway, event, content):
+    """차단 사유를 게이트웨이가 **직접** 사용자에게 보낸다 (모델 경유 없음).
+
+    코어 규약: 훅은 `gateway=self` 를 받고, `skip` 은 "drop (no reply, plugin
+    handled)" 로 정의돼 있다 — 안내 발송은 플러그인 몫이다.
+    `Gateway._deliver_platform_notice` 는 코루틴이고 이 콜백은 이벤트 루프에서
+    동기 실행되므로 await 할 수 없다. create_task 로 넘기고 즉시 돌아온다
+    (이 콜백이 늦으면 게이트웨이 전체가 그동안 멈춘다).
+
+    ★ 인가 확인이 필수다. 이 훅은 **인증보다 먼저** 돈다(run.py 의 "Hook runs
+      BEFORE auth"). 확인 없이 보내면 페어링되지 않은 외부인이 아무 문구나 던져
+      봇의 응답을 끌어낼 수 있다. 확인 수단이 없거나 예외가 나면 보내지 않는다.
+    """
+    source = getattr(event, "source", None)
+    if gateway is None or source is None or not content:
+        return
+    try:
+        check = getattr(gateway, "_is_user_authorized", None)
+        if check is None or not check(source):
+            return                                   # 미인가·확인 불가 → 침묵
+        asyncio.get_running_loop().create_task(
+            gateway._deliver_platform_notice(source, content))
+    except Exception as exc:
+        # 안내 실패가 차단을 되돌려선 안 된다. 무응답으로 떨어질 뿐이다.
+        logger.warning("[prompt-gate] 차단 안내 발송 실패 → 무응답: %s", exc)
+
+
 _POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="prompt-gate")
 
 
@@ -360,7 +412,11 @@ def register(ctx):
         payload = ""
         if history:
             payload += ("<context>\n같은 대화의 직전 발화다. 요청이 여러 메시지로 "
-                        "쪼개졌을 수 있으니 이어지는 의도 전체로 판정하라.\n"
+                        "쪼개졌을 수 있으니, <request> 가 혼자서는 뜻이 통하지 않는 "
+                        "조각이면 이어지는 의도 전체로 판정하라.\n"
+                        "반대로 <request> 가 그 자체로 완결된 다른 주제면 이 "
+                        "<context> 는 무시하라 — 앞에서 무엇을 얘기했든 새 주제의 "
+                        "분류를 그쪽으로 끌고 가지 마라.\n"
                         + "\n".join(history) + "\n</context>\n")
         payload += "<request>\n" + text + "\n</request>"
         fut = _POOL.submit(_call_llm, payload)
@@ -376,6 +432,7 @@ def register(ctx):
         # kwargs 로만 받는다. 코어가 kwarg 를 추가해도 TypeError 로 조용히
         # fail-open 되지 않게 하기 위해서다.
         event = kwargs.get("event")
+        gateway = kwargs.get("gateway")
         visible, body = _model_visible_text(event) if event is not None else ("", "")
         src = getattr(event, "source", None)
         platform = getattr(getattr(src, "platform", None), "value", "") or str(
@@ -384,6 +441,18 @@ def register(ctx):
         mid = str(getattr(event, "message_id", "") or "")
         ids = _identities(event)
         is_admin = bool(ids & st["admins"])
+        # 감사 로그에는 **사용자가 친 본문**을 남긴다. visible 을 남기면 앞머리가
+        # channel_context 라서 "사용자가 무슨 말을 했는데 막혔나"를 로그로 알 수 없다
+        # (2026-08-10: 차단된 질문이 로그에 'Cronjob Response: daily-farewell' 로
+        #  남아 원인 추적이 한 바퀴 헛돌았다).
+        excerpt = body[:150] + (f" [+ctx {len(visible) - len(body)}자]"
+                                if len(visible) > len(body) else "")
+
+        def blocked(category, notice):
+            """차단 반환값. 모델에는 아무것도 안 가고, 사유만 사용자에게 직접 간다."""
+            if st["on_block"] != "silent":
+                _notify_user(gateway, event, notice)
+            return {"action": "skip", "reason": f"prompt-gate:{category}"}
 
         def decide(category, how):
             if category in ADMIN_ONLY:
@@ -398,10 +467,8 @@ def register(ctx):
                 _audit("BLOCKED_PROMPT", platform=platform, session=session,
                        rule=category,
                        detail=f"admin_only via={how} ids={sorted(ids)} "
-                              f"text={visible[:150]}")
-                if st["on_block"] == "silent":
-                    return {"action": "skip", "reason": f"prompt-gate:{category}"}
-                return {"action": "rewrite", "text": ADMIN_NOTICE.format(desc=desc)}
+                              f"text={excerpt}")
+                return blocked(category, ADMIN_NOTICE.format(desc=desc))
 
             allowed = category in ALLOWED
             desc = ALLOWED.get(category) or BLOCKED.get(category, "")
@@ -416,15 +483,10 @@ def register(ctx):
                 return None
             _audit("BLOCKED_PROMPT" if acting else "WOULD_BLOCK_PROMPT",
                    platform=platform, session=session, rule=category,
-                   detail=f"via={how} text={visible[:150]}")
+                   detail=f"via={how} text={excerpt}")
             if not acting:
                 return None  # 관측 모드 — 로그만 남기고 통과시킨다
-            if st["on_block"] == "silent":
-                return {"action": "skip", "reason": f"prompt-gate:{category}"}
-            # rewrite: 원문을 버리고 우리가 만든 안내 문구로 갈아끼운다.
-            # 위험한 원문 자체가 모델에 도달하지 않는 것이 핵심이다.
-            return {"action": "rewrite",
-                    "text": BLOCK_NOTICE.format(cat=category, desc=desc)}
+            return blocked(category, BLOCK_NOTICE.format(desc=desc))
 
         try:
             if not visible.strip():
@@ -455,9 +517,23 @@ def register(ctx):
                 if pat.search(visible):
                     return decide(cat, "regex")
 
+            # ADMIN_GATE 만은 **이번에 사용자가 친 본문(body)** 으로 판정한다.
+            # visible 에는 channel_context·인용문, 즉 그 대화에 쌓인 과거 발화가
+            # 통째로 들어 있다. 그걸로 판정하면 DM 에 DB 얘기가 한 번 오간 뒤로는
+            # 무슨 말을 쳐도 db_schema_query 가 매칭돼, 관리자 전용 차단이
+            # mode 와 무관하게 영구히 걸린다 (2026-08-10 실사례: 같은 DM 에서
+            # "댓글 저장은 어느 API 를 타?" 포함 4건 연속 무응답, via=regex).
+            # ADMIN_ONLY 는 관측이 아니라 접근 제어라 오탐 비용이 가장 크고,
+            # 판정 근거는 사용자가 실제로 한 말이어야 한다.
+            # 인용문에 실려 온 인젝션은 위 HARD_BLOCK 이 visible 전체로 계속 본다.
             for pat, cat in ADMIN_GATE_RE:
-                if pat.search(visible):
-                    return decide(cat, "regex")
+                if not pat.search(body):
+                    continue
+                if cat == "db_schema_query" and not DB_REQUEST_RE.search(body):
+                    # 화제어만 있고 요청 표지가 없다 — 언급·항의일 수 있다.
+                    # 백스톱을 건너뛰고 분류기 판정에 맡긴다 (DB_REQUEST_RE 주석 참조)
+                    continue
+                return decide(cat, "regex")
 
             if mid and mid in seen:
                 return decide(seen[mid], "cache")
@@ -486,11 +562,7 @@ def register(ctx):
                    detail=f"{type(exc).__name__}: {exc}")
             if st["mode"] != "enforce":
                 return None
-            if st["on_block"] == "silent":
-                return {"action": "skip", "reason": "prompt-gate:error"}
-            return {"action": "rewrite",
-                    "text": BLOCK_NOTICE.format(cat="unknown",
-                                                desc=BLOCKED["unknown"])}
+            return blocked("error", BLOCK_NOTICE.format(desc=BLOCKED["unknown"]))
 
     ctx.register_hook("pre_gateway_dispatch", _gate)
     if not st["admins"]:
