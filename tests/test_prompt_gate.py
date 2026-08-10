@@ -25,7 +25,12 @@ gate_mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(gate_mod)
 
 
-def write_config(mode="enforce", on_block="notify"):
+ADMIN_ID = "D0BGQGRBM51"
+
+
+def write_config(mode="enforce", on_block="notify", admins=(ADMIN_ID,)):
+    # dedent 뒤에 붙이므로 여기서는 최종 들여쓰기(admins: 는 6칸)를 그대로 쓴다
+    admin_lines = "".join(f"\n        - {a}" for a in admins)
     with open(os.path.join(HOME, "config.yaml"), "w", encoding="utf-8") as f:
         f.write(textwrap.dedent(f"""\
             plugins:
@@ -34,7 +39,7 @@ def write_config(mode="enforce", on_block="notify"):
                   mode: {mode}
                   on_block: {on_block}
                   timeout: 1.0
-            """))
+                  admins:""") + (admin_lines or " []") + "\n")
 
 
 class FakeLlm:
@@ -58,13 +63,15 @@ class FakeCtx:
 
 
 class FakeEvent:
-    def __init__(self, text, mid="m1"):
+    def __init__(self, text, mid="m1", user="U_MEMBER"):
         self.text, self.message_id = text, mid
-        self.source = type("S", (), {"platform": "slack", "chat_id": "C1"})()
+        self.source = type("S", (), {"platform": "slack", "chat_id": "C1",
+                                     "user_id": user})()
 
 
-def build(reply=None, raises=None, mode="enforce", on_block="notify"):
-    write_config(mode, on_block)
+def build(reply=None, raises=None, mode="enforce", on_block="notify",
+          admins=(ADMIN_ID,)):
+    write_config(mode, on_block, admins)
     ctx = FakeCtx(FakeLlm(reply, raises))
     gate_mod.register(ctx)
     return ctx
@@ -330,6 +337,98 @@ elapsed = _time.time() - t0
 check("타임아웃 후 차단", verdict(r), "rewrite")
 check(f"  └ {elapsed:.1f}s 안에 반환 (예산 1.0+1.0)",
       "yes" if elapsed < 5 else f"no({elapsed:.1f}s)", "yes")
+
+print("\n── 관리자 전용: DB 구조 질의 ──")
+# 일반 사용자에게는 mode 와 무관하게 차단, 관리자에게는 통과.
+DB_ASK = [
+    "데이터베이스 구조 알려줘",
+    "DB 스키마 좀 보여줘",
+    "테이블 구조 정리해줘",
+    "users 테이블 컬럼 목록 알려줘",
+    "엔티티 클래스 보고 매핑 알려줘",
+    "show me the database schema",
+]
+for i, text in enumerate(DB_ASK):
+    ctx = build(raises=RuntimeError("분류기 죽음"), mode="observe")
+    r = ctx.hooks["pre_gateway_dispatch"](event=FakeEvent(text, f"db{i}"))
+    check(f"비관리자: {text[:26]}", verdict(r), "rewrite")
+    check("  └ LLM 호출 없이 차단", str(ctx.llm.calls), "0")
+
+for i, text in enumerate(DB_ASK):
+    ctx = build(raises=RuntimeError("분류기 죽음"), mode="observe")
+    r = ctx.hooks["pre_gateway_dispatch"](
+        event=FakeEvent(text, f"dba{i}", user=ADMIN_ID))
+    check(f"관리자: {text[:26]}", verdict(r), "allow")
+
+# 분류기가 살아 있어도 결과는 같아야 한다 (LLM 경로)
+ctx = build(reply="db_schema_query", mode="observe")
+check("LLM 판정 db_schema_query — 비관리자 차단",
+      verdict(ctx.hooks["pre_gateway_dispatch"](
+          event=FakeEvent("우리 서비스 데이터 모델이 어떻게 돼 있어", "dbl1"))),
+      "rewrite")
+ctx = build(reply="db_schema_query", mode="observe")
+check("LLM 판정 db_schema_query — 관리자 통과",
+      verdict(ctx.hooks["pre_gateway_dispatch"](
+          event=FakeEvent("우리 서비스 데이터 모델이 어떻게 돼 있어", "dbl2",
+                          user=ADMIN_ID))),
+      "allow")
+
+# 원문이 모델에 도달하지 않아야 한다
+ctx = build(raises=RuntimeError("x"), mode="observe")
+r = ctx.hooks["pre_gateway_dispatch"](
+    event=FakeEvent("SECRET_TABLE 스키마 알려줘", "dbleak"))
+check("차단 시 원문이 교체 텍스트에 없음",
+      "absent" if "SECRET_TABLE" not in r.get("text", "") else "leaked", "absent")
+
+print("\n── 관리자 전용: 재시작 ──")
+RESTART_ASK = ["/restart", "!restart", "게이트웨이 재시작해줘",
+               "너 재시작 해줘", "hermes restart 해줘"]
+for i, text in enumerate(RESTART_ASK):
+    ctx = build(raises=RuntimeError("분류기 죽음"), mode="observe")
+    r = ctx.hooks["pre_gateway_dispatch"](event=FakeEvent(text, f"rs{i}"))
+    check(f"비관리자: {text[:26]}", verdict(r), "rewrite")
+for i, text in enumerate(RESTART_ASK):
+    ctx = build(raises=RuntimeError("분류기 죽음"), mode="observe")
+    r = ctx.hooks["pre_gateway_dispatch"](
+        event=FakeEvent(text, f"rsa{i}", user=ADMIN_ID))
+    check(f"관리자: {text[:26]}", verdict(r), "allow")
+
+print("\n── 관리자 판정 fail-closed ──")
+# admins 미설정이면 아무도 통과 못 한다 (설정 누락이 무제한 허용이 되면 안 된다)
+ctx = build(raises=RuntimeError("x"), mode="observe", admins=())
+check("admins 비어 있으면 관리자 ID 도 차단",
+      verdict(ctx.hooks["pre_gateway_dispatch"](
+          event=FakeEvent("DB 스키마 보여줘", "na1", user=ADMIN_ID))), "rewrite")
+
+# 식별자가 chat_id 로만 실려 오는 경우도 인정한다 (Slack DM 채널 ID 형태)
+ev = FakeEvent("DB 스키마 보여줘", "cid1")
+ev.source = type("S", (), {"platform": "slack", "chat_id": ADMIN_ID})()
+ctx = build(raises=RuntimeError("x"), mode="observe")
+check("chat_id 가 관리자 ID 면 통과",
+      verdict(ctx.hooks["pre_gateway_dispatch"](event=ev)), "allow")
+
+# 식별자 필드를 하나도 못 찾으면 관리자 아님
+ev = FakeEvent("DB 스키마 보여줘", "noid1")
+ev.source = type("S", (), {"platform": "slack"})()
+ctx = build(raises=RuntimeError("x"), mode="observe")
+check("식별자 없으면 비관리자로 취급",
+      verdict(ctx.hooks["pre_gateway_dispatch"](event=ev)), "rewrite")
+
+print("\n── 관리자 전용 게이트가 기존 판정을 넓히지 않는지 ──")
+# "재시작"·"구조" 가 들어가도 대상이 다르면 잡지 않는다 (오차단 방지)
+for text, mid in (("배치 재시작 로그 어디서 봐?", "fp1"),
+                  ("이 서비스 구조 설명해줘", "fp2"),
+                  ("호출 흐름이 어떻게 되는지 알려줘", "fp3")):
+    ctx = build(reply="service_explain", mode="enforce")
+    check(f"오차단 아님: {text[:24]}",
+          verdict(ctx.hooks["pre_gateway_dispatch"](event=FakeEvent(text, mid))),
+          "allow")
+
+# 관리자라도 다른 차단 카테고리는 그대로 막힌다 (관리자 = 전체 우회가 아니다)
+ctx = build(reply="harness_self_modify", mode="enforce")
+check("관리자도 harness_self_modify 는 차단",
+      verdict(ctx.hooks["pre_gateway_dispatch"](
+          event=FakeEvent("설정 바꿔줘", "adm1", user=ADMIN_ID))), "rewrite")
 
 print(f"\n총 {ok + fail}개  통과: {ok}  실패: {fail}")
 sys.exit(0 if fail == 0 else 1)

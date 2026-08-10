@@ -107,7 +107,7 @@
 | Phase | 상태 |
 | --- | --- |
 | 0 관측 | **진행 필요.** `mode: observe` 로 배포됨. 감사 로그의 `WOULD_BLOCK_PROMPT` 를 1~2주 모아 오차단을 확인한다 |
-| 1 카테고리·분류기 | **완료.** 허용 8종 + 차단 11종 확정 (초안의 `deploy_trigger`·`report_ops`·`ticket_ops` 는 수행 수단 부재로 폐기, `read_only_query` 는 수단별로 분할). 분류기는 `ctx.llm.complete` 1회 |
+| 1 카테고리·분류기 | **완료.** 허용 8종 + 관리자 전용 2종 + 차단 11종 확정 (초안의 `deploy_trigger`·`report_ops`·`ticket_ops` 는 수행 수단 부재로 폐기, `read_only_query` 는 수단별로 분할). 분류기는 `ctx.llm.complete` 1회 |
 | 2 차단 모드 | **구현 완료, 미활성.** `config.yaml` 의 `mode: enforce` 한 줄로 전환. 차단 사유 전달은 `rewrite` 로 결정 — 원문을 버리고 안내 문구로 교체하므로 위험한 원문이 모델에 도달하지 않으면서 사용자는 사유를 안다. `on_block: silent` 로 `skip` 선택 가능 |
 | 3 감사 로그 | **완료.** `BLOCKED_PROMPT` / `WOULD_BLOCK_PROMPT` 로 `security_log.write` 에 기록 |
 
@@ -147,7 +147,28 @@ Phase 2 의 차단 사유 전달 경로는 Phase 0 관측 없이 정할 수 없�
 | 페이로드 분할 | 요청을 두 메시지로 쪼개면 각각은 무해해 보인다 | 세션별 직전 발화 N개를 `<context>` 로 함께 분류 |
 | 감사 로그 조용한 실패 | `security_log` import 실패를 조용히 넘겨서 관측이 "기록 0" 으로 끝날 수 있었다 | 등록 시점에 `logger.error` |
 
-회귀 방지: `tests/test_prompt_gate.py` 74개.
+회귀 방지: `tests/test_prompt_gate.py` 112개.
+
+### 5-2. 관리자 전용 카테고리 [2026-08-10]
+
+`ADMIN_ONLY` 2종을 추가함. `config.yaml` 의 `plugins.entries.prompt-gate.admins` 에
+있는 발신자만 통과하고, 나머지에게는 **`mode` 와 무관하게 항상 차단**된다 —
+관측 실험이 아니라 운영자가 지정한 접근 제어이기 때문.
+
+| 카테고리 | 대상 | 검출 |
+| --- | --- | --- |
+| `db_schema_query` | DB 테이블·컬럼·스키마·ERD·엔티티 등 데이터 구조 질의 | 정규식 선판정 + 분류기 |
+| `agent_restart` | 에이전트·게이트웨이 재시작 요청 | `/restart`·`!restart` 커맨드명 + 정규식 + 분류기 |
+
+식별 방법: 이벤트의 `user_id`·`sender_id`·`author_id`·`from_id`·`user`·`sender`·
+`chat_id` 중 하나라도 `admins` 와 일치하면 관리자. 코어의 실제 필드명을 이 레포에서
+확인할 수 없어 후보를 전부 훑고, **하나도 못 찾으면 비관리자로 간다(fail-closed)**.
+`admins` 가 비어 있으면 아무도 통과하지 못한다. 실제로 어떤 값이 오는지는 차단 로그의
+`ids=` 로 확인함.
+
+한계: 위 5-1 의 구조적 잔여 2번이 그대로 적용된다. `/restart` 를 코어가 이 훅보다
+앞에서 처리하면 커맨드 경로는 걸리지 않고 평문 문구만 걸린다. 도달 여부는
+`admin_gate=` 로그로 확인함.
 
 ### 닫지 못한 것 — 구조적 잔여
 
