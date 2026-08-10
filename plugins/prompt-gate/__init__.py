@@ -403,6 +403,12 @@ def register(ctx):
         mid = str(getattr(event, "message_id", "") or "")
         ids = _identities(event)
         is_admin = bool(ids & st["admins"])
+        # 감사 로그에는 **사용자가 친 본문**을 남긴다. visible 을 남기면 앞머리가
+        # channel_context 라서 "사용자가 무슨 말을 했는데 막혔나"를 로그로 알 수 없다
+        # (2026-08-10: 차단된 질문이 로그에 'Cronjob Response: daily-farewell' 로
+        #  남아 원인 추적이 한 바퀴 헛돌았다).
+        excerpt = body[:150] + (f" [+ctx {len(visible) - len(body)}자]"
+                                if len(visible) > len(body) else "")
 
         def decide(category, how):
             if category in ADMIN_ONLY:
@@ -417,7 +423,7 @@ def register(ctx):
                 _audit("BLOCKED_PROMPT", platform=platform, session=session,
                        rule=category,
                        detail=f"admin_only via={how} ids={sorted(ids)} "
-                              f"text={visible[:150]}")
+                              f"text={excerpt}")
                 if st["on_block"] == "silent":
                     return {"action": "skip", "reason": f"prompt-gate:{category}"}
                 return {"action": "rewrite", "text": ADMIN_NOTICE.format(desc=desc)}
@@ -435,7 +441,7 @@ def register(ctx):
                 return None
             _audit("BLOCKED_PROMPT" if acting else "WOULD_BLOCK_PROMPT",
                    platform=platform, session=session, rule=category,
-                   detail=f"via={how} text={visible[:150]}")
+                   detail=f"via={how} text={excerpt}")
             if not acting:
                 return None  # 관측 모드 — 로그만 남기고 통과시킨다
             if st["on_block"] == "silent":
@@ -474,10 +480,19 @@ def register(ctx):
                 if pat.search(visible):
                     return decide(cat, "regex")
 
+            # ADMIN_GATE 만은 **이번에 사용자가 친 본문(body)** 으로 판정한다.
+            # visible 에는 channel_context·인용문, 즉 그 대화에 쌓인 과거 발화가
+            # 통째로 들어 있다. 그걸로 판정하면 DM 에 DB 얘기가 한 번 오간 뒤로는
+            # 무슨 말을 쳐도 db_schema_query 가 매칭돼, 관리자 전용 차단이
+            # mode 와 무관하게 영구히 걸린다 (2026-08-10 실사례: 같은 DM 에서
+            # "댓글 저장은 어느 API 를 타?" 포함 4건 연속 무응답, via=regex).
+            # ADMIN_ONLY 는 관측이 아니라 접근 제어라 오탐 비용이 가장 크고,
+            # 판정 근거는 사용자가 실제로 한 말이어야 한다.
+            # 인용문에 실려 온 인젝션은 위 HARD_BLOCK 이 visible 전체로 계속 본다.
             for pat, cat in ADMIN_GATE_RE:
-                if not pat.search(visible):
+                if not pat.search(body):
                     continue
-                if cat == "db_schema_query" and not DB_REQUEST_RE.search(visible):
+                if cat == "db_schema_query" and not DB_REQUEST_RE.search(body):
                     # 화제어만 있고 요청 표지가 없다 — 언급·항의일 수 있다.
                     # 백스톱을 건너뛰고 분류기 판정에 맡긴다 (DB_REQUEST_RE 주석 참조)
                     continue
