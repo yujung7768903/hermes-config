@@ -30,7 +30,6 @@ fail-open
 from __future__ import annotations
 
 import html
-import importlib
 import logging
 import re
 import sys
@@ -261,7 +260,11 @@ def build_blocks(text: str) -> list[dict] | None:
 
 # ── 클라이언트 프록시 ──────────────────────────────────────────────────────
 class _ClientProxy:
-    """`chat_postMessage` 만 가로채고 나머지는 원본 클라이언트로 넘긴다."""
+    """발신 메서드만 가로채고 나머지는 원본 클라이언트로 넘긴다.
+
+    `chat_update` 도 덮는다 — 스트리밍이 켜져 있으면 최종 답변이 새 메시지가
+    아니라 자리표시 메시지 편집(`edit_message` → `chat_update`)으로 전달된다.
+    """
 
     def __init__(self, inner):
         object.__setattr__(self, "_inner", inner)
@@ -272,8 +275,7 @@ class _ClientProxy:
     def __setattr__(self, name, value):
         setattr(object.__getattribute__(self, "_inner"), name, value)
 
-    async def chat_postMessage(self, *args, **kwargs):
-        inner = object.__getattribute__(self, "_inner")
+    def _with_blocks(self, args, kwargs):
         try:
             if not args and not kwargs.get("blocks"):
                 blocks = build_blocks(kwargs.get("text") or "")
@@ -282,65 +284,82 @@ class _ClientProxy:
                     kwargs["blocks"] = blocks
         except Exception as exc:  # pragma: no cover - 변환 실패가 발신을 막으면 안 된다
             logger.warning("[slack-table] 표 변환 실패 → 기존 텍스트로 보낸다: %s", exc)
-        return await inner.chat_postMessage(*args, **kwargs)
+        return kwargs
+
+    async def chat_postMessage(self, *args, **kwargs):
+        inner = object.__getattribute__(self, "_inner")
+        return await inner.chat_postMessage(*args, **self._with_blocks(args, kwargs))
+
+    async def chat_update(self, *args, **kwargs):
+        inner = object.__getattribute__(self, "_inner")
+        return await inner.chat_update(*args, **self._with_blocks(args, kwargs))
 
 
 # ── 등록 ──────────────────────────────────────────────────────────────────
-_ADAPTER_PATHS = (
-    "hermes_plugins.platforms.slack.adapter",
-    "plugins.platforms.slack.adapter",
-    "hermes.plugins.platforms.slack.adapter",
-)
-
-
-def _find_adapter_cls():
-    """SlackAdapter 클래스를 찾는다. 모듈 경로는 설치 형태마다 다르다."""
+# 모듈명을 짐작해서 import 하면 안 된다. 코어 로더는 이 파일을
+# `hermes_plugins.slack_platform.adapter` 로 올리는데, 같은 파일을
+# `plugins.platforms.slack.adapter` 로 다시 import 하면 **별개 클래스 객체**가
+# 생기고 그걸 패치해도 게이트웨이는 원본을 쓴다. 로그에는 "적용됨" 이 찍히지만
+# 아무 효과가 없다 — 실제로 그렇게 한 번 헛돌았다.
+# 그래서 이미 sys.modules 에 올라온 것만 본다. import 는 하지 않는다.
+def _target_classes() -> list[type]:
+    found: list[type] = []
     for name, mod in list(sys.modules.items()):
-        if name.endswith("platforms.slack.adapter"):
-            cls = getattr(mod, "SlackAdapter", None)
-            if isinstance(cls, type):
-                return cls
-    for path in _ADAPTER_PATHS:
-        try:
-            cls = getattr(importlib.import_module(path), "SlackAdapter", None)
-        except Exception:
+        if mod is None or "slack" not in name.lower():
             continue
-        if isinstance(cls, type):
-            return cls
-    return None
+        cls = getattr(mod, "SlackAdapter", None)
+        if isinstance(cls, type) and not any(cls is seen for seen in found):
+            found.append(cls)
+    return found
 
 
-def _patch() -> bool:
-    cls = _find_adapter_cls()
-    if cls is None:
-        return False
-    if getattr(cls, "_slack_table_patched", False):
-        return True
-    original = getattr(cls, "_get_client", None)
-    if original is None:
-        logger.error(
-            "[slack-table] SlackAdapter._get_client 가 없다 — 코어가 바뀌었다. "
-            "표는 계속 텍스트로 나간다."
-        )
-        return True  # 재시도해도 결과가 같다. 매 세션 로그를 반복하지 않는다
-
+def _wrap(original):
     def _get_client(self, *args, **kwargs):
         return _ClientProxy(original(self, *args, **kwargs))
 
-    cls._get_client = _get_client
-    cls._slack_table_patched = True
-    logger.info("[slack-table] 적용됨 — 마크다운 표를 Block Kit table 로 보낸다")
-    return True
+    return _get_client
+
+
+def _patch() -> bool:
+    """찾은 SlackAdapter 를 전부 감싼다. 하나라도 감쌌으면 True.
+
+    같은 파일이 두 모듈명으로 올라와 있을 수 있으니 고르지 않고 다 감싼다.
+    """
+    patched = False
+    for cls in _target_classes():
+        # 상속으로 물려받은 플래그를 자기 것으로 착각하지 않게 __dict__ 로 본다
+        if cls.__dict__.get("_slack_table_patched"):
+            patched = True
+            continue
+        original = getattr(cls, "_get_client", None)
+        if original is None:
+            logger.error(
+                "[slack-table] %s.SlackAdapter 에 _get_client 가 없다 — 코어가 "
+                "바뀌었다. 표는 계속 텍스트로 나간다.", cls.__module__)
+            continue
+        cls._get_client = _wrap(original)
+        cls._slack_table_patched = True
+        patched = True
+        logger.info("[slack-table] 적용됨 — %s.SlackAdapter", cls.__module__)
+    return patched
 
 
 def register(ctx) -> None:
-    if _patch():
-        return
-    # 어댑터 모듈이 아직 로드되지 않았다. 첫 세션 시작 시 한 번 더 시도한다.
-    # 콜백은 반드시 동기 함수여야 하고 kwargs 를 다 받아야 한다 (async 는 코어가
-    # 조용히 버리고, 인자 부족은 TypeError 로 삼켜진다).
+    # 어댑터는 플러그인 등록보다 늦게 로드된다(플러그인 04:26:48 → Slack 연결
+    # 04:26:50). 그래서 등록 시점에는 보통 못 찾는다.
+    _patch()
+
+    # 발신 전에 반드시 지나는 지점에서 다시 시도한다. pre_gateway_dispatch 는
+    # 인바운드 메시지마다 게이트웨이 프로세스에서 돌므로, 그 답변이 나가기 전에
+    # 패치가 보장된다. 콜백은 동기 함수여야 하고(async 는 코어가 조용히 버린다)
+    # kwargs 를 다 받아야 하며(부족하면 TypeError 로 삼켜진다), 흐름에 끼어들지
+    # 않으려면 None 을 돌려줘야 한다.
     def _retry(**_kwargs):
         _patch()
+        return None
 
-    ctx.register_hook("on_session_start", _retry)
-    logger.info("[slack-table] 어댑터 미로드 — on_session_start 에서 재시도한다")
+    for hook in ("pre_gateway_dispatch", "on_session_start"):
+        try:
+            ctx.register_hook(hook, _retry)
+        except Exception as exc:  # pragma: no cover
+            logger.warning("[slack-table] %s 훅 등록 실패: %s", hook, exc)
