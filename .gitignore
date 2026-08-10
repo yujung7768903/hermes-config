@@ -49,6 +49,7 @@
 !memories/*.md
 !skills/deploy-log/**
 !skills/token-usage/**
+!skills/incident-triage/**
 
 # 어디에 있든 제외
 __pycache__/
