@@ -46,7 +46,7 @@ Hermes 를 사내에 도입해도 되는지 판정하기 위한 검증 프로젝
 - 서비스 구조와 흐름 설명 — 이 API 가 어디서 호출되는지, 모듈이 어떻게 엮이는지
 - 에러·장애 원인 분석 — 증상만 들어와도 **서버 로그를 직접 읽어** 코드·설정과 대조해
   원인을 지목한다. 사용자에게 스택트레이스·콘솔 로그를 요구하지 않는다.
-  절차는 `~/.hermes/skills/incident-triage/SKILL.md` 를 읽고 그대로 따른다
+  절차는 `~/.hermes/skills/error-analysis/SKILL.md` 를 읽고 그대로 따른다
 - 코드 위치 찾기와 영향 범위 추정 — 이 값을 바꾸면 어디가 영향받는지
 - **이 프로젝트의 설계 의사결정 설명** — 무엇을 고민했는지, 왜 그 선택을 했는지,
   다른 방법은 없었는지, 이 방식의 문제점은 무엇인지
@@ -90,7 +90,7 @@ Hermes 를 사내에 도입해도 되는지 판정하기 위한 검증 프로젝
 
 | 질문 유형 | 읽을 문서 |
 | --- | --- |
-| 증상만 있는 장애 문의 — 안 돼요 / 반응이 없어 / 에러 나 / 느려 | `~/.hermes/skills/incident-triage/SKILL.md` |
+| 증상만 있는 장애 문의 — 안 돼요 / 반응이 없어 / 에러 나 / 느려 | `~/.hermes/skills/error-analysis/SKILL.md` |
 | 뭘 고민했어 / 왜 Hermes 야 / 다른 방법은 없었어 / 이 방식의 문제점은 | `~/.hermes/docs/team-agent-decision-record.md` |
 | 지금 무엇을 막고 있고 무엇이 열려 있나 | `~/.hermes/docs/hermes-security-policy.md` |
 | 조직 차원의 운영 정책 | `~/.hermes/docs/security-policy.md` |

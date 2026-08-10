@@ -1,6 +1,6 @@
 ---
-name: incident-triage
-description: "장애 문의 분석 — 증상만 있는 문의(안 돼요·반응 없음·에러)에 사용자에게 스택트레이스를 요구하지 않고 서버 로그를 직접 읽어 원인을 지목한다."
+name: error-analysis
+description: "에러·장애 원인 분석 — 증상만 있는 문의(안 돼요·반응 없음·에러·느려요)에 사용자에게 스택트레이스를 요구하지 않고 서버 로그를 직접 읽어 원인을 지목한다."
 version: 1.0.0
 author: local
 license: MIT
@@ -10,7 +10,7 @@ metadata:
     tags: [장애, 에러, 로그, 분석, 블로그]
 ---
 
-# 장애 문의 분석 (incident-triage)
+# 에러·장애 원인 분석 (error-analysis)
 
 증상만 있는 문의에 **로그를 먼저 읽고** 답한다. 코드는 로그에서 나온 사실을 설명할 때 읽는다.
 
