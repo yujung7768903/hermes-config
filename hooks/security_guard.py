@@ -371,4 +371,42 @@ if tool_name == "patch":
             if is_cron_store(line.split(":", 1)[-1].strip()):
                 block(f"{SCHEDULER_MSG}\n사유: cron/jobs.json 직접 편집\n대상: {line.strip()}")
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# [규칙 6] 원격 저장소 push 차단 (모든 플랫폼)
+# 하네스 갱신은 한 방향이다 — 관리자가 로컬에서 고쳐 main 에 push 하고, 서버가
+# 그것을 pull 한다 (scripts/deploy_from_git.sh). 에이전트가 push 할 수 있으면
+# 자기 자신의 하네스를 원격에 써서 다음 pull 로 되돌아오게 만들 수 있고, LK 동결과
+# SOUL.md 보호(규칙 4)가 한 바퀴 돌아 무력화된다.
+#
+# 이 규칙은 명령을 막는 층이다. 진짜 경계는 자격증명이다 —
+# ~/.hermes/.git 은 pushurl 이 봉인돼 있고(--install), 서버에는 write 권한 토큰을
+# 두지 않는다. 별도 clone 이나 alias(`git config alias.p push`) 로 우회할 수 있는
+# 층이므로 여기에만 의존하지 않는다.
+#
+# fetch·pull·clone·status·log 는 막지 않는다.
+# ─────────────────────────────────────────────────────────────────────────────
+GIT_PUSH_MSG = (
+    "[보안 정책] 원격 저장소로의 push 는 허용되지 않습니다.\n"
+    "하네스 갱신은 관리자가 로컬에서 수정해 main 에 올리고 서버가 pull 하는 방향만 있습니다.\n"
+    "변경이 필요하면 내용을 사용자에게 전달하세요."
+)
+
+# git 과 push 사이에는 옵션 토큰만 허용한다 — `git -C dir push`, `git -c a=b push`,
+# `git --git-dir=x push` 는 잡고 `git commit -m "... git push ..."` 는 통과시킨다.
+# 명령이 시작될 수 있는 위치(줄 시작 · ; · | · & · ( · 백틱 · 개행)만 본다.
+# 남는 오탐: 히어독 본문에서 줄이 "git push" 로 시작하는 경우. 규칙 3 의 aws 와
+# 같은 선택이다 — 개행 뒤를 안 보면 `cmd1\ngit push` 가 통과한다.
+GIT_PUSH_RE = re.compile(
+    r"(?:^|[;|&(`\n])\s*(?:sudo\s+|env\s+|\w+=\S+\s+)*git\s+"
+    r"(?:--\S+\s+|-[a-zA-Z]\s+\S+\s+|-[a-zA-Z]\s+)*"
+    r"(?:push|send-pack)\b",
+    re.IGNORECASE,
+)
+
+if tool_name == "terminal":
+    command = str(tool_input.get("command", ""))
+    if GIT_PUSH_RE.search(command):
+        block(f"{GIT_PUSH_MSG}\n차단된 명령: {command[:200]}")
+
 sys.exit(0)

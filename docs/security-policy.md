@@ -58,6 +58,25 @@
 > 하지 않기로 했기 때문이다 (위 "배경" 정정 참조). git pull 만 허용되고, 그것도
 > 하네스 갱신 경로로만 쓴다. 개발 자동화를 다시 검토할 때 이 절이 출발점이 된다.
 
+> **[2026-08-10 갱신]** 하네스 갱신이 자동화됐고, push 는 명시적으로 차단됐다.
+>
+> | | 내용 |
+> | --- | --- |
+> | 반영 | 관리자가 main 에 push → 서버 크론이 1분마다 fetch → author 검증 후 `merge --ff-only` |
+> | author 필터 | `yu-jung0422@hankookilbo.com` · `yu-jung31476@naver.com` · `68562176+yujung7768903@users.noreply.github.com` 세 개만 통과. 하나라도 밖에 있으면 그 push 전체를 보류 |
+> | 재시작 | `config.yaml`·`SOUL.md`·`plugins/`·`skills/`·`memories/` 가 바뀐 경우만 `systemctl restart hermes-gateway` |
+> | push 차단 | L1 `approvals.deny` · L2 `security_guard` 훅 규칙 6 · 서버 저장소 `remote.origin.pushurl` 봉인 |
+> | 구현 | `scripts/deploy_from_git.sh`, `/etc/cron.d/hermes-deploy`, 로그 `/var/log/hermes-deploy.log` |
+> | 크론 소유 | root. 실행본은 `/opt/hermes-deploy/deploy.sh` (root 소유) — hermes 소유 트리의 스크립트를 root 로 실행하면 그 파일을 쓸 수 있는 주체가 root 실행을 얻는다 |
+>
+> author 는 위조 가능하므로 이 필터는 보안 경계가 아니라 오배포 방지다. 실제 경계는
+> GitHub 저장소의 push 권한이다. 서버에는 write 권한 토큰을 두지 않는다 (read-only
+> deploy key 가 이상적).
+>
+> 폴링을 택한 이유 — 서버는 private 서브넷이고 bastion 인바운드 SSH 는 사내 IP 로
+> 제한돼 있다. GitHub Actions 러너와 GitHub 웹훅은 랜덤 IP 라 보안그룹을 열지 않으면
+> 서버에 도달할 수 없다.
+
 - 개발 작업은 /home/hermes/work/ 에서만 수행
 - GitHub organization 단위로 git pull 허용
   - 허용 org 목록은 설정 파일로 관리, 관리자만 수정 가능
@@ -126,6 +145,10 @@
 - 프로세스 종료 금지
 - 재시작: ec2-user가 직접 서버 접근하여 수행
   - 추후 슬랙 관리자 명령으로 연동 고려 (현재 미구현)
+
+> **[2026-08-10 갱신]** 하네스 반영 시의 재시작은 root 크론이 자동으로 한다
+> (`scripts/deploy_from_git.sh`, 위 "Git / 개발 작업" 갱신 참조). 재시작 주체는
+> 여전히 에이전트가 아니다 — 에이전트의 `systemctl restart` 는 계속 차단 대상이다.
 
 ---
 

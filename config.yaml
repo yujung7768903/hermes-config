@@ -354,6 +354,18 @@ approvals:
     - '*cp*jobs.json*'
     - '*mv*jobs.json*'
     - '*python*jobs.json*'
+
+    # ── 원격 저장소 push 차단 ────────────────────────────────────────────────
+    # 하네스 갱신은 한 방향이다 — 관리자가 main 에 올리고 서버가 pull 한다.
+    # 1차 방어는 security_guard 훅 규칙 6(정규식이 git 과 push 사이의 옵션만 허용),
+    # 이 목록은 훅 fail-open 대비 2차다. fetch·pull·clone·status 는 막지 않는다.
+    # 오탐: 명령문 안에 " git push" 라는 문자열이 들어가면(커밋 메시지 산문 등)
+    # 걸린다. fnmatch 는 명령 경계를 못 보므로 감수한 범위다.
+    - 'git push*'
+    - '* git push*'
+    - "*\ngit push*"
+    - 'git send-pack*'
+    - '* git send-pack*'
 hooks_auto_accept: true
 hooks:
   pre_tool_call:
