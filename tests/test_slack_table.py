@@ -177,6 +177,10 @@ class FakeClient:
         self.calls.append(kwargs)
         return {"ts": "1.0"}
 
+    async def reactions_add(self, **kwargs):
+        self.calls.append(kwargs)
+        return {"ok": True}
+
 
 def run(coro):
     return asyncio.new_event_loop().run_until_complete(coro)
@@ -200,7 +204,14 @@ check("이미 blocks 가 있으면 건드리지 않는다",
       fake.calls[-1]["blocks"] == [{"type": "divider"}])
 
 run(proxy.chat_update(channel="C1", ts="1.0", text=TABLE))
-check("chat_postMessage 외 메서드는 그대로 통과", "blocks" not in fake.calls[-1])
+check("chat_update 도 blocks 를 붙인다 (스트리밍 편집 경로)",
+      "blocks" in fake.calls[-1] and fake.calls[-1]["blocks"][0]["type"] == "table")
+
+run(proxy.chat_update(channel="C1", ts="1.0", text="표 없는 편집"))
+check("chat_update, 표 없으면 그대로", "blocks" not in fake.calls[-1])
+
+run(proxy.reactions_add(channel="C1", timestamp="1.0", name="x"))
+check("가로채지 않는 메서드는 원본으로 넘어간다", fake.calls[-1].get("name") == "x")
 
 
 class BoomClient(FakeClient):
@@ -219,6 +230,64 @@ try:
           "blocks" not in sent and sent["text"] == TABLE)
 finally:
     mod.build_blocks = _saved
+
+print("── 어댑터 탐색·패치 ──")
+# 실제로 헛돌았던 상황: 서버 로더는 이 클래스를
+# hermes_plugins.slack_platform.adapter 로 올린다. 예전 코드는
+# "platforms.slack.adapter" 로 끝나는 이름만 찾아서 못 잡았고,
+# import 폴백이 같은 파일의 별개 모듈을 잡아 헛패치했다.
+import types  # noqa: E402
+
+
+class FakeAdapter:
+    def __init__(self):
+        self.inner = FakeClient()
+
+    def _get_client(self, chat_id):
+        return self.inner
+
+
+def install_fake_module(name):
+    m = types.ModuleType(name)
+    cls = type("SlackAdapter", (FakeAdapter,), {})
+    m.SlackAdapter = cls
+    cls.__module__ = name
+    sys.modules[name] = m
+    return cls
+
+
+REAL_NAME = "hermes_plugins.slack_platform.adapter"
+ALT_NAME = "plugins.platforms.slack.adapter"
+target = install_fake_module(REAL_NAME)
+alt = install_fake_module(ALT_NAME)
+try:
+    found = mod._target_classes()
+    check("서버 실제 모듈명(slack_platform)을 찾는다", any(c is target for c in found),
+          repr([c.__module__ for c in found]))
+    check("같은 파일이 두 이름으로 올라와 있으면 둘 다 찾는다",
+          any(c is alt for c in found))
+
+    check("_patch 가 True 를 돌려준다", mod._patch() is True)
+    check("대상 클래스가 패치됨", target.__dict__.get("_slack_table_patched") is True)
+    check("중복 모듈도 패치됨", alt.__dict__.get("_slack_table_patched") is True)
+
+    inst = target()
+    check("패치된 _get_client 가 프록시를 돌려준다",
+          isinstance(inst._get_client("C1"), mod._ClientProxy))
+
+    run(inst._get_client("C1").chat_postMessage(channel="C1", text=TABLE))
+    check("패치 경로로 실제 blocks 가 실린다",
+          "blocks" in inst.inner.calls[-1])
+
+    check("두 번 패치해도 중첩되지 않는다", mod._patch() is True)
+    before = target._get_client
+    mod._patch()
+    check("재실행이 _get_client 를 다시 감싸지 않는다", target._get_client is before)
+finally:
+    sys.modules.pop(REAL_NAME, None)
+    sys.modules.pop(ALT_NAME, None)
+
+check("어댑터가 없으면 False (등록 시점 상황)", mod._patch() is False)
 
 print(f"\n{ok} passed, {fail} failed")
 sys.exit(1 if fail else 0)

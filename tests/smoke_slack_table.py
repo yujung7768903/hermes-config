@@ -18,18 +18,32 @@ spec = importlib.util.spec_from_file_location(
 st = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(st)
 
-RAW = """저는 한국일보 모의 블로그 서비스 분석 전담 에이전트입니다.
+# 2026-08-10 13:31 DM 에서 실제로 깨진 본문 (일부)
+RAW = """도메인 엔티티 5개를 직접 읽었습니다. 정리해 드립니다.
 
-## 못 하는 일
+---
 
-| :x: | 이유 |
-|---|---|
-| 코드·설정 수정 | 읽기 전용 에이전트 |
-| 배포·프로세스 재시작 | 운영 권한 없음 |
-| 자격증명 조회·전달 | 보안 정책 |
+테이블 구조
 
-프론트 주소는 [블로그](http://16.184.55.44:4200/) 이고 설정은 `config.yaml` 입니다.
-어디서부터 시작할까요?"""
+users
+| 컬럼 | 타입 | 제약 |
+|---|---|---|
+| id | BIGINT | PK, AUTO_INCREMENT |
+| email | VARCHAR | UNIQUE, NOT NULL |
+| bio | TEXT | nullable |
+
+:page_facing_up: User.java 6~25행
+
+---
+
+comments
+| 컬럼 | 타입 | 제약 |
+|---|---|---|
+| parent_id | BIGINT | FK → comments.id, nullable (대댓글) |
+| created_at | DATETIME | - |
+
+parent_id가 있어서 대댓글 구조 지원합니다.
+:page_facing_up: Comment.java 8~40행"""
 
 formatted = SlackAdapter.format_message(None, RAW)
 print("=== format_message 결과 ===")
