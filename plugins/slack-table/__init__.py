@@ -49,9 +49,10 @@ MAX_SECTION_CHARS = 2900 # Slack: section.text 3000자 상한 (여유분 제외)
 # 실제로 더 큰 표가 필요해지면 여기만 올리고 실물로 확인한다.
 MAX_TABLE_ROWS = 50
 MAX_TABLE_COLS = 10
-# caption 은 data_table 필수 필드다. 본문 어디에도 제목이 있다는 보장이 없어서
-# 고정값을 쓴다 — 앞 문장을 제목으로 승격하는 건 필요해지면 그때.
+# caption 은 data_table 필수 필드이고 Slack 이 표 위에 **실제로 렌더한다.**
+# 그래서 표 바로 앞 한 줄을 제목으로 끌어올리고, 없을 때만 이 고정값을 쓴다.
 TABLE_CAPTION = "표"
+CAPTION_MAX = 80
 
 
 # ── 표 탐지 ───────────────────────────────────────────────────────────────
@@ -200,22 +201,44 @@ def _cell(value: str) -> dict:
     }
 
 
+def _plain(value: str) -> str:
+    """mrkdwn 한 줄 → 마커를 뗀 평문. raw_text 자리(헤더·caption)에 쓴다."""
+    return "".join(
+        el.get("text")
+        or el.get("url")
+        or (f":{el['name']}:" if el.get("type") == "emoji" else "")
+        for el in _inline_elements(value)
+    )
+
+
 def _header_cell(value: str) -> dict:
     """헤더 행 전용. data_table 의 첫 행은 raw_text 만 받는다.
 
     rich_text 를 넣으면 400 이라 mrkdwn 마커를 살릴 수 없다. `*구분*` 이 별표째
     찍히지 않도록 인라인 파서를 한 번 태워 평문만 뽑는다.
     """
-    text = "".join(
-        el.get("text")
-        or el.get("url")
-        or (f":{el['name']}:" if el.get("type") == "emoji" else "")
-        for el in _inline_elements(value)
-    )
-    return {"type": "raw_text", "text": text or " "}
+    return {"type": "raw_text", "text": _plain(value) or " "}
 
 
-def _table_block(rows: list[list[str]]) -> dict | None:
+def _take_caption(text: str) -> tuple[str, str | None]:
+    """표 앞 텍스트에서 제목 한 줄을 떼어낸다 → (남은 텍스트, caption).
+
+    떼는 조건은 그 줄이 **단독 줄**일 때뿐이다 — 구간의 첫 줄이거나 앞이 빈 줄.
+    문단 한가운데 줄을 가져가면 본문에서 마지막 줄만 사라져 문단이 깨진다.
+    """
+    lines = text.split("\n")
+    idx = next((i for i in range(len(lines) - 1, -1, -1) if lines[i].strip()), None)
+    if idx is None:
+        return text, None
+    if idx > 0 and lines[idx - 1].strip():
+        return text, None
+    caption = _plain(lines[idx]).strip()
+    if not caption or len(caption) > CAPTION_MAX:
+        return text, None
+    return "\n".join(lines[:idx]), caption
+
+
+def _table_block(rows: list[list[str]], caption: str | None = None) -> dict | None:
     if len(rows) < 2:
         return None  # 헤더만 있고 데이터가 없으면 표로 만들 이유가 없다
     width = len(rows[0])
@@ -226,7 +249,7 @@ def _table_block(rows: list[list[str]]) -> dict | None:
         cells = (row + [""] * width)[:width]  # 열 수는 헤더에 맞춘다
         make = _header_cell if idx == 0 else _cell
         built.append([make(c) for c in cells])
-    return {"type": "data_table", "caption": TABLE_CAPTION, "rows": built}
+    return {"type": "data_table", "caption": caption or TABLE_CAPTION, "rows": built}
 
 
 def _section_blocks(text: str) -> list[dict]:
@@ -260,12 +283,23 @@ def build_blocks(text: str) -> list[dict] | None:
     if not any(kind == "table" for kind, _ in segments):
         return None
 
+    # 표 바로 앞 단독 줄을 그 표의 caption 으로 옮긴다. 본문에서는 빼서
+    # 같은 문장이 제목과 section 에 두 번 나오지 않게 한다.
+    captions: dict[int, str] = {}
+    for i, (kind, _payload) in enumerate(segments):
+        if kind != "table" or i == 0 or segments[i - 1][0] != "text":
+            continue
+        rest, caption = _take_caption(segments[i - 1][1])  # type: ignore[arg-type]
+        if caption:
+            segments[i - 1] = ("text", rest)
+            captions[i] = caption
+
     blocks: list[dict] = []
-    for kind, payload in segments:
+    for i, (kind, payload) in enumerate(segments):
         if kind == "text":
             blocks.extend(_section_blocks(payload))  # type: ignore[arg-type]
             continue
-        block = _table_block(payload)  # type: ignore[arg-type]
+        block = _table_block(payload, captions.get(i))  # type: ignore[arg-type]
         if block is None:
             return None  # 상한을 넘은 표 하나 때문에 나머지를 쪼개진 않는다
         blocks.append(block)

@@ -72,21 +72,47 @@ check("셀 내용 유지",
 
 print("── 앞뒤 텍스트 ──")
 
+# 표 바로 앞의 단독 줄은 본문에 남지 않고 그 표의 caption 으로 올라간다.
+# caption 은 data_table 필수 필드이고 Slack 이 표 위에 실제로 렌더하므로,
+# 고정값 "표" 를 띄우는 대신 사람이 쓴 그 한 줄을 제목으로 쓴다.
 mixed = build(f"확인한 내용입니다.\n\n{TABLE}\n\n결론은 위와 같습니다.")
-check("section → table → section 순서",
-      mixed is not None
-      and [b["type"] for b in mixed] == ["section", "data_table", "section"],
+check("앞줄은 caption 으로 올라가고 section 은 남지 않는다",
+      mixed is not None and [b["type"] for b in mixed] == ["data_table", "section"],
       repr([b["type"] for b in mixed] if mixed else None))
-check("앞 텍스트 보존",
-      mixed and mixed[0]["text"]["text"] == "확인한 내용입니다.")
+check("  └ caption 이 그 줄",
+      mixed and mixed[0]["caption"] == "확인한 내용입니다.",
+      repr(mixed[0].get("caption") if mixed else None))
 check("뒤 텍스트 보존",
-      mixed and mixed[2]["text"]["text"] == "결론은 위와 같습니다.")
-check("section 은 mrkdwn", mixed and mixed[0]["text"]["type"] == "mrkdwn")
+      mixed and mixed[1]["text"]["text"] == "결론은 위와 같습니다.")
+check("section 은 mrkdwn", mixed and mixed[1]["text"]["type"] == "mrkdwn")
+
+# 문단 한가운데 줄은 가져가지 않는다 — 마지막 줄만 사라지면 문단이 깨진다
+para = build(f"설명 첫 줄입니다.\n설명 둘째 줄입니다.\n{TABLE}")
+check("문단 뒤 표는 caption 을 뺏어가지 않는다",
+      para is not None and [b["type"] for b in para] == ["section", "data_table"],
+      repr([b["type"] for b in para] if para else None))
+check("  └ 문단이 통째로 남는다",
+      para and para[0]["text"]["text"] == "설명 첫 줄입니다.\n설명 둘째 줄입니다.")
+check("  └ caption 은 고정값으로 폴백", para and para[1]["caption"] == mod.TABLE_CAPTION)
+
+long_lead = "가" * (mod.CAPTION_MAX + 1)
+over = build(f"{long_lead}\n\n{TABLE}")
+check("긴 줄은 caption 으로 올리지 않는다",
+      over is not None and [b["type"] for b in over] == ["section", "data_table"],
+      repr([b["type"] for b in over] if over else None))
+
+lead_md = build(f"*가장* 좋아요 많은 글입니다.\n{TABLE}")
+check("caption 은 mrkdwn 마커를 뗀 평문",
+      lead_md and lead_md[0]["caption"] == "가장 좋아요 많은 글입니다.",
+      repr(lead_md[0].get("caption") if lead_md else None))
 
 two = build(f"{TABLE}\n\n그리고\n\n{TABLE}")
 check("표 2개 모두 변환",
-      two is not None and [b["type"] for b in two] == ["data_table", "section", "data_table"],
+      two is not None and [b["type"] for b in two] == ["data_table", "data_table"],
       repr([b["type"] for b in two] if two else None))
+check("  └ 두 번째 표만 앞줄을 caption 으로 가져간다",
+      two and (two[0]["caption"], two[1]["caption"]) == (mod.TABLE_CAPTION, "그리고"),
+      repr([b.get("caption") for b in two] if two else None))
 
 print("── 코드펜스 ──")
 
