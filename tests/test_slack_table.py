@@ -170,6 +170,47 @@ check("긴 앞 텍스트가 여러 section 으로 나뉜다", len(sections) > 1,
 check("section 각각이 3000자 미만",
       all(len(b["text"]["text"]) <= mod.MAX_SECTION_CHARS for b in sections))
 
+print("── 인사 Block Kit ──")
+# 블록은 플러그인에, 폴백 텍스트는 SOUL.md 에 있다. 두 벌이라 한쪽만 고치면
+# 탐지가 조용히 깨진다 — 그래서 SOUL.md 원문을 실제로 읽어 검사한다.
+SOUL = os.path.join(ROOT, "SOUL.md")
+with open(SOUL, encoding="utf-8") as f:
+    soul = f.read()
+
+_after = soul.split("## 인사 응답", 1)
+GREETING_TEXT = _after[1].split("```")[1].strip() if len(_after) > 1 else ""
+
+check("SOUL.md 에서 인사 문구를 뽑았다", bool(GREETING_TEXT), repr(GREETING_TEXT[:40]))
+check("SOUL.md 인사 문구가 블록으로 바뀐다",
+      mod.greeting_blocks(GREETING_TEXT) is not None,
+      repr(GREETING_TEXT[:30]) + " … " + repr(GREETING_TEXT[-20:]))
+
+greet = mod.greeting_blocks(GREETING_TEXT) or []
+check("header 로 시작한다", greet and greet[0]["type"] == "header")
+check("블로그 열기 버튼이 있다",
+      any(b.get("accessory", {}).get("action_id") == "open_blog" for b in greet))
+check("버튼 url 이 블로그 주소",
+      any(b.get("accessory", {}).get("url") == mod.BLOG_URL for b in greet))
+check("context 로 끝난다", greet and greet[-1]["type"] == "context")
+check("블록 상한 이내", len(greet) <= mod.MAX_BLOCKS)
+check("section 은 3000자 미만",
+      all(len(b["text"]["text"]) <= mod.MAX_SECTION_CHARS
+          for b in greet if b["type"] == "section"))
+
+# format_message 가 마크다운 이탤릭을 mrkdwn 으로 바꿔도 앞뒤 줄은 그대로다
+check("이탤릭 변환(_x_) 후에도 탐지된다",
+      mod.greeting_blocks(GREETING_TEXT.replace("*모의 블로그*", "_모의 블로그_")) is not None)
+
+check("상수를 되돌려주지 않는다 (호출자가 원본을 못 건드린다)",
+      mod.greeting_blocks(GREETING_TEXT)[0] is not mod.GREETING_BLOCKS[0])
+
+check("일반 답변은 인사가 아니다", mod.greeting_blocks("댓글 저장은 CommentController 입니다.") is None)
+check("빈 문자열은 인사가 아니다", mod.greeting_blocks("") is None)
+check("인사 뒤에 답변이 붙으면 갈아끼우지 않는다 (내용 유실 방지)",
+      mod.greeting_blocks(GREETING_TEXT + "\n\n그리고 댓글은 CommentController 입니다.") is None)
+check("인사 문구만 인용해도 꼬리가 다르면 그대로",
+      mod.greeting_blocks(mod.GREETING_HEAD + " 라고 답하게 되어 있습니다.") is None)
+
 print("── 클라이언트 프록시 ──")
 
 
@@ -220,6 +261,28 @@ check("chat_update, 표 없으면 그대로", "blocks" not in fake.calls[-1])
 
 run(proxy.reactions_add(channel="C1", timestamp="1.0", name="x"))
 check("가로채지 않는 메서드는 원본으로 넘어간다", fake.calls[-1].get("name") == "x")
+
+run(proxy.chat_postMessage(channel="C1", text=GREETING_TEXT, mrkdwn=True))
+sent = fake.calls[-1]
+check("인사도 발송 경로에서 blocks 가 실린다",
+      sent.get("blocks", [{}])[0].get("type") == "header")
+check("인사의 text 폴백도 그대로 남는다", sent.get("text") == GREETING_TEXT)
+
+
+class RejectClient(FakeClient):
+    """blocks 가 실린 첫 호출만 거절한다 (Slack 400 재현)."""
+
+    async def chat_postMessage(self, **kwargs):
+        if kwargs.get("blocks"):
+            raise RuntimeError("invalid_blocks")
+        return await super().chat_postMessage(**kwargs)
+
+
+reject = mod._ClientProxy(RejectClient())
+run(reject.chat_postMessage(channel="C1", text=TABLE, mrkdwn=True))
+sent = reject._inner.calls[-1]
+check("blocks 가 400 이면 텍스트로 재시도한다 (답변 유실 방지)",
+      "blocks" not in sent and sent.get("text") == TABLE, repr(sent))
 
 
 class BoomClient(FakeClient):

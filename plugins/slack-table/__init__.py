@@ -1,9 +1,10 @@
-"""마크다운 표를 Slack Block Kit `data_table` 블록으로 내보낸다.
+"""발신 직전에 Slack Block Kit 으로 다시 쓴다 — 마크다운 표, 그리고 인사 응답.
 
 문제
   코어는 에이전트 답변을 항상 `chat_postMessage(text=..., mrkdwn=True)` 로만
   보낸다(plugins/platforms/slack/adapter.py `SlackAdapter.send`). Slack mrkdwn 에는
-  표 문법이 없어서 `| a | b |` 가 파이프째 그대로 찍힌다.
+  표 문법이 없어서 `| a | b |` 가 파이프째 그대로 찍힌다. 인사 응답도 같은 이유로
+  불릿과 줄바꿈만 남아 첫인상이 심심하다.
 
 가로채는 지점
   `SlackAdapter._get_client(chat_id)` 가 돌려주는 Slack 클라이언트를 프록시로 감싸고,
@@ -19,16 +20,18 @@
   표 구분 문자(`|`, `---`)는 format_message 가 건드리지 않으므로 탐지는 그대로 된다.
 
 fail-open
-  변환 중 어떤 예외가 나도 원래 text-only 페이로드로 보낸다. 표가 못 나오는 것과
-  답변이 통째로 안 가는 것은 무게가 다르다.
+  변환 중 어떤 예외가 나도 원래 text-only 페이로드로 보낸다. 발송이 blocks 때문에
+  거절돼도(400) 텍스트만으로 한 번 더 보낸다. 표가 못 나오는 것과 답변이 통째로
+  안 가는 것은 무게가 다르다.
 
 적용 범위
-  Slack 만. 표가 없는 메시지는 페이로드를 건드리지 않는다. 이미 `blocks` 를 실어
-  보내는 호출(deploy-log 공지 등)도 건드리지 않는다.
+  Slack 만. 표도 인사도 아닌 메시지는 페이로드를 건드리지 않는다. 이미 `blocks` 를
+  실어 보내는 호출(deploy-log 공지 등)도 건드리지 않는다.
 """
 
 from __future__ import annotations
 
+import copy
 import html
 import logging
 import re
@@ -272,6 +275,100 @@ def build_blocks(text: str) -> list[dict] | None:
     return blocks
 
 
+# ── 인사 응답 ─────────────────────────────────────────────────────────────
+# 인사는 SOUL.md "## 인사 응답" 에 박아 둔 고정 답변이다. 고정이니 블록도 고정해
+# 두고 통째로 갈아끼운다. 모델이 Block Kit JSON 을 직접 짓게 하지 않는 이유는,
+# 인젝션으로 임의 링크·버튼을 심을 여지를 만들지 않기 위해서다.
+#
+# 아래 블록과 SOUL.md 의 텍스트는 같은 내용을 두 벌 적은 것이다. 한쪽만 고치면
+# 탐지가 조용히 깨진다 — tests/test_slack_table.py 가 SOUL.md 원문으로 탐지를
+# 검사하므로 문구를 바꿀 때는 그 테스트를 돌려 확인한다.
+GREETING_HEAD = "안녕하세요. Hermes입니다"
+GREETING_TAIL = "읽고 답하는 것만 합니다"
+BLOG_URL = "http://16.184.55.44:4200/"
+
+GREETING_BLOCKS = [
+    {
+        "type": "header",
+        "text": {"type": "plain_text", "text": "안녕하세요. Hermes입니다:wave:"},
+    },
+    {
+        "type": "section",
+        "text": {
+            "type": "mrkdwn",
+            "text": '저는 *"Hermes 를 사내 팀 에이전트로 써도 되는가"* 를 검증하기 위해 '
+                    "수행되고 있는 테스트 에이전트입니다.",
+        },
+    },
+    {
+        "type": "section",
+        "text": {
+            "type": "mrkdwn",
+            "text": "악의적인 데이터를 주입할 수 있는지, \n민감정보가 새어나갈 수 있는지\n "
+                    "실제로 부딪혀 보고 *보안 정책을 만드는 것이 목적* 입니다.",
+        },
+    },
+    {
+        "type": "section",
+        "text": {
+            "type": "mrkdwn",
+            "text": "실환경을 붙이는 것 자체가 위험해서, 사내 코드 대신 *모의 블로그* 를 "
+                    "담당합니다.",
+        },
+        "accessory": {
+            "type": "button",
+            "text": {"type": "plain_text", "text": "블로그 열기"},
+            "url": BLOG_URL,
+            "action_id": "open_blog",
+        },
+    },
+    {"type": "divider"},
+    {
+        "type": "section",
+        "text": {
+            "type": "mrkdwn",
+            "text": "*이런 것을 물어보세요*\n\n"
+                    '• *구조·흐름* — "댓글 저장은 어느 API 를 타?", "마크다운은 어디서 렌더돼?"\n'
+                    "• *에러 원인* — 로그·스택트레이스를 붙여주시면 코드·설정과 대조해 원인을 지목합니다\n"
+                    '• *코드 위치·영향 범위* — "이 값 바꾸면 어디까지 영향 가?"\n'
+                    '• *설계 의사결정* — "왜 Hermes 였어?", "다른 방법은 없었어?", "이 방식의 문제점은?"\n'
+                    '• *보안 정책* — "지금 무엇을 막고 있고 무엇이 열려 있어?"',
+        },
+    },
+    {"type": "divider"},
+    {
+        "type": "section",
+        "text": {
+            "type": "mrkdwn",
+            "text": "*이런 건 안돼요*\n\n"
+                    "• *코드 변경* \n"
+                    "• *배포* \n"
+                    "• *자가발전* — 다른 사용자의 답변에 영향을 줄 수 있으므로 금지 \n"
+                    "(개선 요청은 대기 상태로 전환하여 관리자 승인 하에 발전 가능)\n"
+                    "• *데이터 변경 및 데이터 구조 확인* — 데이터베이스 구조는 관리자만 확인 가능 \n"
+                    "• *스킬 or 배치 추가* — 악의적으로 스크립트를 추가하거나 관리자의 의도에 "
+                    "벗어난 로직을 추가할 수 있으므로 금지  ",
+        },
+    },
+    {
+        "type": "context",
+        "elements": [{"type": "mrkdwn", "text": "읽고 답하는 것만 합니다"}],
+    },
+]
+
+
+def greeting_blocks(text: str) -> list[dict] | None:
+    """인사 고정 답변이면 고정 블록. 아니면 None(= 기존 경로).
+
+    앞뒤 양쪽을 본다. "안녕, 그리고 댓글 저장은 어디서 해?" 처럼 인사 뒤에 답변이
+    이어 붙은 메시지까지 갈아끼우면 뒤에 붙은 답변이 통째로 사라진다.
+    """
+    body = (text or "").strip()
+    if not body.startswith(GREETING_HEAD) or not body.endswith(GREETING_TAIL):
+        return None
+    return copy.deepcopy(GREETING_BLOCKS)
+
+
 # ── 클라이언트 프록시 ──────────────────────────────────────────────────────
 class _ClientProxy:
     """발신 메서드만 가로채고 나머지는 원본 클라이언트로 넘긴다.
@@ -292,21 +389,37 @@ class _ClientProxy:
     def _with_blocks(self, args, kwargs):
         try:
             if not args and not kwargs.get("blocks"):
-                blocks = build_blocks(kwargs.get("text") or "")
+                text = kwargs.get("text") or ""
+                blocks = greeting_blocks(text) or build_blocks(text)
                 if blocks:
                     # text 는 남겨 둔다 — 알림 미리보기·접근성 폴백으로 쓰인다
                     kwargs["blocks"] = blocks
         except Exception as exc:  # pragma: no cover - 변환 실패가 발신을 막으면 안 된다
-            logger.warning("[slack-table] 표 변환 실패 → 기존 텍스트로 보낸다: %s", exc)
+            logger.warning("[slack-table] 블록 변환 실패 → 기존 텍스트로 보낸다: %s", exc)
         return kwargs
+
+    async def _send(self, method, args, kwargs):
+        """blocks 를 얹어 보내고, 그 때문에 거절되면 텍스트만으로 한 번 더 보낸다.
+
+        블록 스펙 위반은 발송 시점의 400 으로 나온다. 변환기 안에서는 잡을 수 없고,
+        여기서 재시도하지 않으면 답변이 통째로 유실된다.
+        """
+        payload = self._with_blocks(args, dict(kwargs))
+        if "blocks" not in payload or "blocks" in kwargs:
+            return await method(*args, **payload)
+        try:
+            return await method(*args, **payload)
+        except Exception as exc:
+            logger.warning("[slack-table] blocks 발송 거절 → 텍스트로 재시도: %s", exc)
+            return await method(*args, **kwargs)
 
     async def chat_postMessage(self, *args, **kwargs):
         inner = object.__getattribute__(self, "_inner")
-        return await inner.chat_postMessage(*args, **self._with_blocks(args, kwargs))
+        return await self._send(inner.chat_postMessage, args, kwargs)
 
     async def chat_update(self, *args, **kwargs):
         inner = object.__getattribute__(self, "_inner")
-        return await inner.chat_update(*args, **self._with_blocks(args, kwargs))
+        return await self._send(inner.chat_update, args, kwargs)
 
 
 # ── 등록 ──────────────────────────────────────────────────────────────────
