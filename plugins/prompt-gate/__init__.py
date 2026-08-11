@@ -140,10 +140,18 @@ HARD_BLOCK_RE = [(re.compile(p, re.IGNORECASE), c) for p, c in HARD_BLOCK]
 # db_schema_query / agent_restart 카테고리이고 이건 최소선이다.
 ADMIN_GATE = [
     # 데이터 구조 질의
+    #
+    # '테이블' 뒤에 '에서' 가 붙으면 구조가 아니라 **값**을 묻는 것이다
+    # ("글 테이블에서 좋아요순 목록 뽑아줘" → service_data_query). 화제어로
+    # 잡지 않도록 두 패턴 모두에서 그 형태를 뺀다.
     (r"(디비|\bDB\b|데이터\s*베이스|database)[^\n]{0,12}"
-     r"(구조|스키마|schema|설계|테이블|table|erd|모델링)", "db_schema_query"),
-    (r"(테이블|table)[^\n]{0,12}"
-     r"(구조|스키마|schema|목록|리스트|컬럼|column|정의|ddl)", "db_schema_query"),
+     r"(구조|스키마|schema|설계|테이블(?!에서)|table|erd|모델링)", "db_schema_query"),
+    (r"(테이블(?!에서)|table)[^\n]{0,12}"
+     r"(구조|스키마|schema|컬럼|column|정의|ddl)", "db_schema_query"),
+    # '목록·리스트' 는 붙어 있을 때만 인정한다. '테이블 목록'(테이블들의 목록)은
+    # 구조 질의지만, 사이에 대상어가 끼면 그 테이블에서 뽑는 **값**의 목록이다
+    # ("글 테이블의 좋아요순 목록"). 12자 창을 그대로 두면 후자까지 잡힌다.
+    (r"(테이블|table)\s*(의|들)?\s*(목록|리스트|list)\b", "db_schema_query"),
     (r"\b(스키마|schema|erd|ddl)\b", "db_schema_query"),
     (r"(컬럼|column)[^\n]{0,12}(구조|목록|리스트|타입|정의|알려|보여)",
      "db_schema_query"),
