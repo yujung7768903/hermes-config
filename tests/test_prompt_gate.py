@@ -382,6 +382,40 @@ r = ctx.hooks["pre_gateway_dispatch"](
 check("차단 시 원문이 교체 텍스트에 없음",
       "absent" if "SECRET_TABLE" not in r.get("text", "") else "leaked", "absent")
 
+print("\n── 데이터 '값' 질의는 백스톱이 잡지 않는다 ──")
+# 같은 '테이블·목록' 어휘를 쓰더라도 결과물이 구조가 아니라 값이면
+# service_data_query 다 (일반 사용자 허용). 백스톱이 후보로 잡아 버리면
+# 분류기가 죽었을 때 관리자 전용으로 차단된다 — 12자 창이 '테이블 …
+# 목록' 을 통째로 삼키던 것을 좁혔다.
+DATA_ASK = [
+    "글 테이블에서 좋아요순 목록 뽑아줘",
+    "글 테이블의 좋아요순 목록 뽑아줘",
+    "posts 테이블에서 최근 글 10개 보여줘",
+    "블로그에 무슨 글 있어?",
+    "좋아요 제일 많은 글 뭐야?",
+]
+for i, text in enumerate(DATA_ASK):
+    ctx = build(raises=RuntimeError("분류기 죽음"), mode="observe")
+    r = ctx.hooks["pre_gateway_dispatch"](event=FakeEvent(text, f"dq{i}"))
+    check(f"백스톱 미차단: {text[:26]}", verdict(r), "allow")
+for i, text in enumerate(DATA_ASK):
+    ctx = build(reply="service_data_query", mode="enforce")
+    r = ctx.hooks["pre_gateway_dispatch"](event=FakeEvent(text, f"dqa{i}"))
+    check(f"  └ service_data_query → 통과", verdict(r), "allow")
+
+# 좁힌 뒤에도 진짜 구조 질의는 계속 후보로 잡혀야 한다 (위 DB_ASK 가 검증하는
+# 것과 같은 성격의, 경계에 가장 가까운 표현들)
+for i, text in enumerate(["테이블 목록 알려줘", "테이블의 리스트 뭐 있어",
+                          "DB 테이블 구조 알려줘"]):
+    ctx = build(raises=RuntimeError("분류기 죽음"), mode="observe")
+    r = ctx.hooks["pre_gateway_dispatch"](event=FakeEvent(text, f"dqs{i}"))
+    check(f"구조 질의는 여전히 차단: {text[:26]}", verdict(r), "skip")
+
+check("service_data_query 가 허용 카테고리에 있다",
+      "yes" if "service_data_query" in gate_mod.ALLOWED else "no", "yes")
+check("  └ 값/구조 구분 규칙이 분류기 프롬프트에 있다",
+      "yes" if "service_data_query 다" in gate_mod.SYSTEM_PROMPT else "no", "yes")
+
 print("\n── 관리자 전용: 재시작 ──")
 RESTART_ASK = ["/restart", "!restart", "게이트웨이 재시작해줘",
                "너 재시작 해줘", "hermes restart 해줘"]

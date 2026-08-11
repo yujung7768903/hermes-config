@@ -1,4 +1,4 @@
-"""마크다운 표를 Slack Block Kit `table` 블록으로 내보낸다.
+"""마크다운 표를 Slack Block Kit `data_table` 블록으로 내보낸다.
 
 문제
   코어는 에이전트 답변을 항상 `chat_postMessage(text=..., mrkdwn=True)` 로만
@@ -42,10 +42,13 @@ logger = logging.getLogger(__name__)
 # API 400 으로 답변 전체를 날리는 것보다 낫다.
 MAX_BLOCKS = 50          # Slack: 메시지당 블록 수 상한
 MAX_SECTION_CHARS = 2900 # Slack: section.text 3000자 상한 (여유분 제외)
-# ponytail: 표 크기 상한은 Slack 문서값이 아니라 보수적으로 잡은 값이다.
+# data_table 실제 상한은 행 201·열 20 이지만 보수적으로 잡아 둔다.
 # 실제로 더 큰 표가 필요해지면 여기만 올리고 실물로 확인한다.
 MAX_TABLE_ROWS = 50
 MAX_TABLE_COLS = 10
+# caption 은 data_table 필수 필드다. 본문 어디에도 제목이 있다는 보장이 없어서
+# 고정값을 쓴다 — 앞 문장을 제목으로 승격하는 건 필요해지면 그때.
+TABLE_CAPTION = "표"
 
 
 # ── 표 탐지 ───────────────────────────────────────────────────────────────
@@ -144,17 +147,16 @@ def _text_element(value: str, style: dict) -> dict | None:
     return el
 
 
-def _inline_elements(cell: str, *, bold: bool = False) -> list[dict]:
+def _inline_elements(cell: str) -> list[dict]:
     """mrkdwn 셀 문자열 → rich_text_section 의 elements.
 
     중첩 스타일(`*_x_*`)은 바깥 하나만 살린다. 표 셀에서 그 이상은 필요 없다.
     """
     elements: list[dict] = []
-    base = {"bold": True} if bold else {}
     pos = 0
 
     def add_plain(raw: str):
-        el = _text_element(html.unescape(raw), base)
+        el = _text_element(html.unescape(raw), {})
         if el:
             elements.append(el)
 
@@ -162,26 +164,22 @@ def _inline_elements(cell: str, *, bold: bool = False) -> list[dict]:
         add_plain(cell[pos:m.start()])
         pos = m.end()
         if m.group("code") is not None:
-            el = _text_element(html.unescape(m.group("code")), {**base, "code": True})
+            el = _text_element(html.unescape(m.group("code")), {"code": True})
         elif m.group("lurl") is not None:
             el = {"type": "link", "url": html.unescape(m.group("lurl"))}
             label = html.unescape(m.group("ltext") or "").strip()
             if label:
                 el["text"] = label
-            if base:
-                el["style"] = dict(base)
         elif m.group("url") is not None:
             el = {"type": "link", "url": html.unescape(m.group("url"))}
-            if base:
-                el["style"] = dict(base)
         elif m.group("emoji") is not None:
             el = {"type": "emoji", "name": m.group("emoji")}
         elif m.group("bold") is not None:
-            el = _text_element(html.unescape(m.group("bold")), {**base, "bold": True})
+            el = _text_element(html.unescape(m.group("bold")), {"bold": True})
         elif m.group("italic") is not None:
-            el = _text_element(html.unescape(m.group("italic")), {**base, "italic": True})
+            el = _text_element(html.unescape(m.group("italic")), {"italic": True})
         else:
-            el = _text_element(html.unescape(m.group("strike")), {**base, "strike": True})
+            el = _text_element(html.unescape(m.group("strike")), {"strike": True})
         if el:
             elements.append(el)
 
@@ -190,13 +188,28 @@ def _inline_elements(cell: str, *, bold: bool = False) -> list[dict]:
     return elements or [{"type": "text", "text": " "}]
 
 
-def _cell(value: str, *, header: bool) -> dict:
+def _cell(value: str) -> dict:
     return {
         "type": "rich_text",
         "elements": [
-            {"type": "rich_text_section", "elements": _inline_elements(value, bold=header)}
+            {"type": "rich_text_section", "elements": _inline_elements(value)}
         ],
     }
+
+
+def _header_cell(value: str) -> dict:
+    """헤더 행 전용. data_table 의 첫 행은 raw_text 만 받는다.
+
+    rich_text 를 넣으면 400 이라 mrkdwn 마커를 살릴 수 없다. `*구분*` 이 별표째
+    찍히지 않도록 인라인 파서를 한 번 태워 평문만 뽑는다.
+    """
+    text = "".join(
+        el.get("text")
+        or el.get("url")
+        or (f":{el['name']}:" if el.get("type") == "emoji" else "")
+        for el in _inline_elements(value)
+    )
+    return {"type": "raw_text", "text": text or " "}
 
 
 def _table_block(rows: list[list[str]]) -> dict | None:
@@ -208,8 +221,9 @@ def _table_block(rows: list[list[str]]) -> dict | None:
     built = []
     for idx, row in enumerate(rows):
         cells = (row + [""] * width)[:width]  # 열 수는 헤더에 맞춘다
-        built.append([_cell(c, header=(idx == 0)) for c in cells])
-    return {"type": "table", "rows": built}
+        make = _header_cell if idx == 0 else _cell
+        built.append([make(c) for c in cells])
+    return {"type": "data_table", "caption": TABLE_CAPTION, "rows": built}
 
 
 def _section_blocks(text: str) -> list[dict]:

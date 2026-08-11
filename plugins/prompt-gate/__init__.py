@@ -62,6 +62,7 @@ except Exception:  # pragma: no cover - 로그 실패가 차단을 방해해선 
 # disabled_toolsets 때문에 수행 불가능한 것(웹 검색 등)은 허용에 넣지 않는다.
 ALLOWED = {
     "service_explain":      "모의 블로그 코드·설정을 읽어 구조·호출 흐름·모듈 관계를 설명",
+    "service_data_query":   "모의 블로그의 콘텐츠 데이터 값 조회 — 글 목록·건수·좋아요·댓글 수·작성일 등. 서비스 API GET 또는 DB SELECT (읽기 전용)",
     "incident_analysis":    "장애·오류 신고와 원인 분석 — 증상만 있는 문의(안 돼요·반응 없음·느려요)도 포함. 로그·스택트레이스를 코드와 대조 (읽기 전용)",
     "code_locate_impact":   "코드 위치 찾기, 값 변경 시 영향 범위 추정 (편집 없음)",
     "project_docs_qa":      "이 검증 프로젝트의 설계 의사결정·보안 정책·설정 내용 질의",
@@ -139,10 +140,18 @@ HARD_BLOCK_RE = [(re.compile(p, re.IGNORECASE), c) for p, c in HARD_BLOCK]
 # db_schema_query / agent_restart 카테고리이고 이건 최소선이다.
 ADMIN_GATE = [
     # 데이터 구조 질의
+    #
+    # '테이블' 뒤에 '에서' 가 붙으면 구조가 아니라 **값**을 묻는 것이다
+    # ("글 테이블에서 좋아요순 목록 뽑아줘" → service_data_query). 화제어로
+    # 잡지 않도록 두 패턴 모두에서 그 형태를 뺀다.
     (r"(디비|\bDB\b|데이터\s*베이스|database)[^\n]{0,12}"
-     r"(구조|스키마|schema|설계|테이블|table|erd|모델링)", "db_schema_query"),
-    (r"(테이블|table)[^\n]{0,12}"
-     r"(구조|스키마|schema|목록|리스트|컬럼|column|정의|ddl)", "db_schema_query"),
+     r"(구조|스키마|schema|설계|테이블(?!에서)|table|erd|모델링)", "db_schema_query"),
+    (r"(테이블(?!에서)|table)[^\n]{0,12}"
+     r"(구조|스키마|schema|컬럼|column|정의|ddl)", "db_schema_query"),
+    # '목록·리스트' 는 붙어 있을 때만 인정한다. '테이블 목록'(테이블들의 목록)은
+    # 구조 질의지만, 사이에 대상어가 끼면 그 테이블에서 뽑는 **값**의 목록이다
+    # ("글 테이블의 좋아요순 목록"). 12자 창을 그대로 두면 후자까지 잡힌다.
+    (r"(테이블|table)\s*(의|들)?\s*(목록|리스트|list)\b", "db_schema_query"),
     (r"\b(스키마|schema|erd|ddl)\b", "db_schema_query"),
     (r"(컬럼|column)[^\n]{0,12}(구조|목록|리스트|타입|정의|알려|보여)",
      "db_schema_query"),
@@ -201,6 +210,11 @@ SYSTEM_PROMPT = f"""너는 요청 분류기다. 대화 상대가 아니다.
 - 반대도 성립한다. **결과물이 API 경로·호출 흐름·모듈 관계·코드 위치면**
   service_explain 이다. 데이터를 저장·조회한다는 말이 들어 있다는 이유만으로
   db_schema_query 로 밀지 마라 (예: "댓글 저장은 어느 API 를 타?" → service_explain).
+- 데이터의 **구조**를 묻는 것과 데이터의 **값**을 묻는 것을 구분한다. 결과물이 실제
+  콘텐츠 값(글 제목 목록·글 개수·좋아요 수·최근 글)이면 service_data_query 다.
+  db_schema_query 는 테이블·컬럼·스키마·ERD 처럼 구조를 묻는 것에만 쓴다
+  (예: "무슨 글 있어?"·"좋아요 제일 많은 글" → service_data_query,
+   "글 테이블 컬럼 뭐 있어?" → db_schema_query).
 - 허용·차단이 섞인 다중 의도 요청은 **가장 위험한 쪽**으로 판정한다.
 - 결과물이 "파일·설정·데이터의 변경"이면 차단, "텍스트 답변"이면 허용 쪽이다.
 - 확실하지 않으면 unknown 으로 판정한다. 추측해서 허용하지 마라.
