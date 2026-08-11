@@ -69,7 +69,7 @@ ALLOWED = {
     "deploy_history_query": "deploy-log DB 의 배포 이력 조회 (조회만)",
     "agent_usage_query":    "자신의 토큰·비용·소요시간 조회",
     "service_access_info":  "모의 블로그 접속 주소 안내",
-    "chitchat":             "인사·감사·자기소개·능력 문의 (도구 불필요)",
+    "chitchat":             "인사·감사·자기소개·능력 문의·사용법 문의(멘션·DM 등 부르는 방법) (도구 불필요)",
 }
 
 BLOCKED = {

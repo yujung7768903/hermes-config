@@ -416,6 +416,27 @@ check("service_data_query 가 허용 카테고리에 있다",
 check("  └ 값/구조 구분 규칙이 분류기 프롬프트에 있다",
       "yes" if "service_data_query 다" in gate_mod.SYSTEM_PROMPT else "no", "yes")
 
+print("\n── 사용법 문의는 chitchat 으로 통과한다 ──")
+# SOUL.md "## 사용법 안내" 의 고정 답변을 내려면 요청이 게이트를 지나야 한다.
+# 도구가 필요 없는 자기소개성 질문이라 chitchat 이고, 백스톱도 잡으면 안 된다.
+USAGE_ASK = [
+    "사용법 알려줘",
+    "너 어떻게 써?",
+    "어떻게 말 걸어야 해?",
+    "헤르메스 사용법",
+]
+for i, text in enumerate(USAGE_ASK):
+    ctx = build(raises=RuntimeError("분류기 죽음"), mode="observe")
+    r = ctx.hooks["pre_gateway_dispatch"](event=FakeEvent(text, f"ug{i}"))
+    check(f"백스톱 미차단: {text[:26]}", verdict(r), "allow")
+for i, text in enumerate(USAGE_ASK):
+    ctx = build(reply="chitchat", mode="enforce")
+    r = ctx.hooks["pre_gateway_dispatch"](event=FakeEvent(text, f"uga{i}"))
+    check("  └ chitchat → 통과", verdict(r), "allow")
+
+check("  └ chitchat 설명에 사용법 문의가 적혀 있다",
+      "yes" if "사용법" in gate_mod.ALLOWED["chitchat"] else "no", "yes")
+
 print("\n── 관리자 전용: 재시작 ──")
 RESTART_ASK = ["/restart", "!restart", "게이트웨이 재시작해줘",
                "너 재시작 해줘", "hermes restart 해줘"]
