@@ -50,6 +50,7 @@
 !skills/deploy-log/**
 !skills/token-usage/**
 !skills/error-analysis/**
+!skills/blog-data/**
 
 # 어디에 있든 제외
 __pycache__/
