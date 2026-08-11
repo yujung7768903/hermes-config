@@ -62,7 +62,7 @@ except Exception:  # pragma: no cover - 로그 실패가 차단을 방해해선 
 # disabled_toolsets 때문에 수행 불가능한 것(웹 검색 등)은 허용에 넣지 않는다.
 ALLOWED = {
     "service_explain":      "모의 블로그 코드·설정을 읽어 구조·호출 흐름·모듈 관계를 설명",
-    "service_data_query":   "모의 블로그의 콘텐츠 데이터 값 조회 — 글 목록·건수·좋아요·댓글 수·작성일 등. 서비스 API 를 GET 으로 호출 (읽기 전용)",
+    "service_data_query":   "모의 블로그의 콘텐츠 데이터 값 조회 — 글 목록·건수·좋아요·댓글 수·작성일 등. 서비스 API GET 또는 DB SELECT (읽기 전용)",
     "incident_analysis":    "장애·오류 신고와 원인 분석 — 증상만 있는 문의(안 돼요·반응 없음·느려요)도 포함. 로그·스택트레이스를 코드와 대조 (읽기 전용)",
     "code_locate_impact":   "코드 위치 찾기, 값 변경 시 영향 범위 추정 (편집 없음)",
     "project_docs_qa":      "이 검증 프로젝트의 설계 의사결정·보안 정책·설정 내용 질의",
