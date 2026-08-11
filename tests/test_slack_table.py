@@ -1,4 +1,4 @@
-"""마크다운 표 → Block Kit table 변환 검증 (slack-table 플러그인)
+"""마크다운 표 → Block Kit data_table 변환 검증 (slack-table 플러그인)
 
 플러그인은 mrkdwn 으로 이미 변환된 문자열을 받는다(`format_message` 이후).
 그래서 입력 예시도 `**bold**` 가 아니라 `*bold*`, `[t](u)` 가 아니라 `<u|t>` 다.
@@ -54,12 +54,17 @@ check("파이프만 있고 구분선 없으면 None",
 check("빈 문자열 None", build("") is None)
 
 blocks = build(TABLE)
-check("표만 있으면 table 블록 1개",
-      blocks is not None and len(blocks) == 1 and blocks[0]["type"] == "table",
+check("표만 있으면 data_table 블록 1개",
+      blocks is not None and len(blocks) == 1 and blocks[0]["type"] == "data_table",
       repr(blocks))
 check("헤더 + 데이터 행 수", blocks and len(blocks[0]["rows"]) == 3)
-check("헤더 셀 bold",
-      blocks and blocks[0]["rows"][0][0]["elements"][0]["elements"][0]["style"]["bold"] is True)
+check("caption 이 붙는다 (data_table 필수 필드)",
+      blocks and blocks[0].get("caption"), repr(blocks[0] if blocks else None))
+check("헤더 셀은 raw_text (data_table 첫 행 제약)",
+      blocks and blocks[0]["rows"][0][0] == {"type": "raw_text", "text": "구분"},
+      repr(blocks[0]["rows"][0][0] if blocks else None))
+check("데이터 셀은 rich_text",
+      blocks and blocks[0]["rows"][1][0]["type"] == "rich_text")
 check("데이터 셀은 bold 없음",
       blocks and "style" not in blocks[0]["rows"][1][0]["elements"][0]["elements"][0])
 check("셀 내용 유지",
@@ -70,7 +75,7 @@ print("── 앞뒤 텍스트 ──")
 mixed = build(f"확인한 내용입니다.\n\n{TABLE}\n\n결론은 위와 같습니다.")
 check("section → table → section 순서",
       mixed is not None
-      and [b["type"] for b in mixed] == ["section", "table", "section"],
+      and [b["type"] for b in mixed] == ["section", "data_table", "section"],
       repr([b["type"] for b in mixed] if mixed else None))
 check("앞 텍스트 보존",
       mixed and mixed[0]["text"]["text"] == "확인한 내용입니다.")
@@ -80,7 +85,7 @@ check("section 은 mrkdwn", mixed and mixed[0]["text"]["type"] == "mrkdwn")
 
 two = build(f"{TABLE}\n\n그리고\n\n{TABLE}")
 check("표 2개 모두 변환",
-      two is not None and [b["type"] for b in two] == ["table", "section", "table"],
+      two is not None and [b["type"] for b in two] == ["data_table", "section", "data_table"],
       repr([b["type"] for b in two] if two else None))
 
 print("── 코드펜스 ──")
@@ -113,9 +118,9 @@ check("*bold* → bold 스타일",
       rows and rows[3][1]["elements"][0]["elements"][0]["style"]["bold"] is True)
 
 emo = build("| :x: | 이유 |\n| --- | --- |\n| 수정 :warning: 금지 | 09:30:00 시작 |")
-head = emo[0]["rows"][0][0]["elements"][0]["elements"][0] if emo else {}
-check("이모지 코드 → emoji 요소",
-      head.get("type") == "emoji" and head.get("name") == "x", repr(head))
+head = emo[0]["rows"][0][0] if emo else {}
+check("헤더의 이모지 코드는 raw_text 로 그대로 남는다",
+      head == {"type": "raw_text", "text": ":x:"}, repr(head))
 mid_els = emo[0]["rows"][1][0]["elements"][0]["elements"] if emo else []
 check("문장 중간 이모지도 분리",
       [e["type"] for e in mid_els] == ["text", "emoji", "text"],
@@ -197,7 +202,7 @@ check("표 없으면 blocks 를 붙이지 않는다", "blocks" not in fake.calls
 
 run(proxy.chat_postMessage(channel="C1", text=TABLE, mrkdwn=True))
 sent = fake.calls[-1]
-check("표 있으면 blocks 를 붙인다", "blocks" in sent and sent["blocks"][0]["type"] == "table")
+check("표 있으면 blocks 를 붙인다", "blocks" in sent and sent["blocks"][0]["type"] == "data_table")
 check("text 폴백은 그대로 남는다", sent.get("text") == TABLE)
 check("channel 등 나머지 인자 보존",
       sent.get("channel") == "C1" and sent.get("mrkdwn") is True)
@@ -208,7 +213,7 @@ check("이미 blocks 가 있으면 건드리지 않는다",
 
 run(proxy.chat_update(channel="C1", ts="1.0", text=TABLE))
 check("chat_update 도 blocks 를 붙인다 (스트리밍 편집 경로)",
-      "blocks" in fake.calls[-1] and fake.calls[-1]["blocks"][0]["type"] == "table")
+      "blocks" in fake.calls[-1] and fake.calls[-1]["blocks"][0]["type"] == "data_table")
 
 run(proxy.chat_update(channel="C1", ts="1.0", text="표 없는 편집"))
 check("chat_update, 표 없으면 그대로", "blocks" not in fake.calls[-1])
@@ -338,7 +343,7 @@ try:
     run(inst._get_client("C1").chat_postMessage(channel="C1", text=TABLE, mrkdwn=True))
     sent = inst.inner.calls[-1]
     check("이 경로로 나간 표가 blocks 로 실린다",
-          "blocks" in sent and sent["blocks"][0]["type"] == "table",
+          "blocks" in sent and sent["blocks"][0]["type"] == "data_table",
           repr(list(sent)))
 finally:
     sys.modules.pop(REAL_NAME, None)

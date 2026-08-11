@@ -1,6 +1,6 @@
 name: slack-table
 version: 0.1.0
-description: 마크다운 표를 Slack Block Kit table 블록으로 보낸다. 표가 없는 메시지는 건드리지 않는다.
+description: 마크다운 표를 Slack Block Kit data_table 블록으로 보낸다. 표가 없는 메시지는 건드리지 않는다.
 author: platform
 kind: standalone
 provides_hooks:
