@@ -105,6 +105,9 @@ def resolve_names(token: str, user_ids: list[str]) -> dict:
     for uid in user_ids:
         if not uid or uid in cache:
             continue
+        # 실패는 빈 문자열로 캐시한다. uid 를 넣으면 원장에 실려 온 이름
+        # (user_name)보다 우선해 버려서, 조회 권한이 없을 때 표에 ID 만 찍힌다.
+        # 빈 값이면 display_name 이 원장 이름 → uid 순으로 흘러간다.
         try:
             req = urllib.request.Request(
                 f"https://slack.com/api/users.info?user={uid}",
@@ -112,11 +115,11 @@ def resolve_names(token: str, user_ids: list[str]) -> dict:
             with urllib.request.urlopen(req, timeout=10) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
             prof = (data.get("user") or {}).get("profile") or {}
-            cache[uid] = (prof.get("display_name") or prof.get("real_name")
-                          or (data.get("user") or {}).get("name") or uid
-                          ) if data.get("ok") else uid
+            cache[uid] = ((prof.get("display_name") or prof.get("real_name")
+                           or (data.get("user") or {}).get("name") or "")
+                          if data.get("ok") else "")
         except Exception:
-            cache[uid] = uid       # 조회 실패는 id 그대로. 리포트는 계속 나간다
+            cache[uid] = ""        # 조회 실패해도 리포트는 계속 나간다
 
     try:
         NAME_CACHE.parent.mkdir(parents=True, exist_ok=True)
