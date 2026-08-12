@@ -18,20 +18,41 @@
 
 ## 등록된 잡
 
-서버 타임존은 UTC 이고 `config.yaml` 에 timezone 설정이 없음. cron 식은 UTC 로 해석됨.
+서버 타임존은 **KST(Asia/Seoul)** 이고 cron 식은 **로컬시간으로 해석됨**. `config.yaml`
+에 timezone 설정은 없음.
 
-| name | script | schedule (UTC) | KST | 전달 |
+확인법 — `date` 가 KST 로 나오고, `cron/jobs.json` 의 `next_run_at` 오프셋이 `+09:00` 임.
+
+```
+$ date && date -u
+Wed Aug 12 19:32:22 KST 2026
+Wed Aug 12 10:32:22 UTC 2026
+```
+
+| name | script | schedule (KST) | 실제 발화 | 전달 |
 | --- | --- | --- | --- | --- |
-| slack-improvement-report | `slack_improvement_report.py` | `0 6 * * 1-5` | 평일 15:00 | local |
-| slack-security-report | `security_report.py` | `0 1 * * *` | 매일 10:00 | local |
+| slack-improvement-report | `slack_improvement_report.py` | `0 6 * * 1-5` | 평일 06:00 | local |
+| slack-security-report | `security_report.py` | `0 1 * * *` | 매일 01:00 | local |
 | slack-security-watch | `security_watch.py` | `*/10 * * * *` | 10분마다 | local |
-| slack-usage-report | `slack_usage_report.py` | `0 0 * * 1` | 월 09:00 | local |
+| slack-usage-report | `slack_usage_report.py` | `10 10 * * *` | 매일 10:10 | local |
 
 전부 `no_agent: true` — 모델을 거치지 않고 스크립트만 실행함.
 
+### 2026-08-12 — 이 표의 KST 열이 9시간 틀려 있었음
+
+원래 "서버는 UTC, cron 식도 UTC" 로 적혀 있었고 KST 열을 +9 해서 채웠음. 실제로는
+서버가 KST 라 앞의 두 잡이 의도한 시각(평일 15:00 · 매일 10:00)이 아니라 **평일 06:00 ·
+매일 01:00** 에 돌고 있었음. `hermes cron create` 출력의 `Next run` 오프셋이 `+09:00`
+으로 찍히면서 드러남.
+
+usage-report 는 등록 때 바로잡음. 나머지 두 잡의 시각을 의도대로 되돌리려면
+`0 15 * * 1-5` · `0 10 * * *` 로 바꿔야 함 — 지금 시각이 문제가 아니라면 그대로 둬도 됨.
+
 ## 사용 현황 리포트 (slack-usage-report)
 
-관리자 채널(`C0BPH28DLDN`)로 최근 7일 사용 현황을 보냄. 원장 하나만 읽음.
+관리자 채널(`C0BPH28DLDN`)로 최근 7일 사용 현황을 **매일 10:10 KST** 에 보냄.
+원장 하나만 읽음. 창은 7일 고정이고 주기만 매일이라, 하루 단위 변화는 일자별 토큰
+추이 차트에서 보임.
 
 | 항목 | 값 |
 | --- | --- |
@@ -52,10 +73,12 @@
 등록 (에이전트는 크론 등록이 차단돼 있으므로 관리자가 ssh 로 실행):
 
 ```bash
-sudo -u hermes -H bash -lc "cd ~ && hermes cron create '0 0 * * 1' \
+sudo -u hermes -H bash -lc "cd ~ && hermes cron create '10 10 * * *' \
   --name slack-usage-report --script slack_usage_report.py \
   --no-agent --deliver local"
 ```
+
+시각을 바꾸려면 `hermes cron edit <job_id> --schedule '<식>'`. job_id 는 `cron list` 에 나옴.
 
 인자 형태를 틀리기 쉬운 곳 세 군데 —
 
