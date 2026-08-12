@@ -56,6 +56,14 @@ try:
 except Exception:  # pragma: no cover - 로그 실패가 차단을 방해해선 안 된다
     security_log = None
 
+# 사용 원장. 게이트가 이미 내린 판정을 **그대로** 기록만 한다 — 분류기 프롬프트도,
+# 출력 스키마도, max_tokens 도 건드리지 않는다. 모델이 읽고 쓰는 것이 그대로여야
+# 인젝션 표면이 그대로다. 원장 실패는 판정에 영향을 주지 않는다(_ledger).
+try:
+    import usage_log  # type: ignore
+except Exception:  # pragma: no cover
+    usage_log = None
+
 
 # ── 카테고리 ──────────────────────────────────────────────────────────────
 # "허용해도 되는 것" 이 아니라 **에이전트가 실제로 수행 가능한 것** 기준이다.
@@ -262,6 +270,27 @@ def _identities(event):
             if isinstance(v, str) and v.strip():
                 out.add(v.strip())
     return out
+
+
+def _sender(event):
+    """(발신자 ID, 표시 이름) — 원장 기록용. 못 찾으면 빈 문자열.
+
+    `_identities` 와 달리 chat_id 는 빼고 본다. 관리자 판정은 "이 값들 중 하나라도
+    admins 에 있으면" 이라 넓게 모아도 되지만, 원장의 사용자 축은 **사람 하나**를
+    가리켜야 해서 대화 키를 섞으면 안 된다.
+    """
+    uid = name = ""
+    for obj in (getattr(event, "source", None), event):
+        for attr in _ID_ATTRS[:-1]:          # chat_id 제외
+            v = getattr(obj, attr, None)
+            v = getattr(v, "id", v)
+            if not uid and isinstance(v, str) and v.strip():
+                uid = v.strip()
+        for attr in ("user_name", "sender_name", "author_name", "display_name"):
+            v = getattr(obj, attr, None)
+            if not name and isinstance(v, str) and v.strip():
+                name = v.strip()
+    return uid, name
 
 
 def _settings(ctx):
@@ -524,6 +553,23 @@ def register(ctx):
                 _notify_user(gateway, event, notice)
             return {"action": "skip", "reason": f"prompt-gate:{category}"}
 
+        def ledger(category, how, verdict):
+            """이미 내린 판정을 사용 원장에 그대로 남긴다 (모니터링용).
+
+            **판정에 관여하지 않는다.** 여기서 무슨 일이 나도 위 결정은 이미 끝나
+            있고, 예외는 전부 삼킨다 — `_audit` 과 같은 취급이다.
+            원장 스키마·질의는 hooks/usage_log.py 에 있다.
+            """
+            if usage_log is None:
+                return
+            try:
+                uid, uname = _sender(event)
+                usage_log.record(platform=platform, user_id=uid, user_name=uname,
+                                 chat_id=session, message_id=mid, request=own,
+                                 category=category, verdict=verdict, via=how)
+            except Exception as exc:      # pragma: no cover
+                logger.debug("[prompt-gate] 원장 기록 실패(무시): %s", exc)
+
         def decide(category, how):
             if category in ADMIN_ONLY:
                 desc = ADMIN_ONLY[category]
@@ -532,12 +578,14 @@ def register(ctx):
                             category, is_admin, platform, session, how,
                             sorted(ids))
                 if is_admin:
+                    ledger(category, how, "allow")
                     return None
                 # mode 와 무관하게 실제로 막는다. 관측 대상이 아니라 접근 제어다.
                 _audit("BLOCKED_PROMPT", platform=platform, session=session,
                        rule=category,
                        detail=f"admin_only via={how} ids={sorted(ids)} "
                               f"text={excerpt}")
+                ledger(category, how, "admin_block")
                 return blocked(category, ADMIN_NOTICE.format(desc=desc))
 
             allowed = category in ALLOWED
@@ -550,10 +598,12 @@ def register(ctx):
                         st["mode"], "allow" if allowed else "block",
                         category, platform, session, how, acting)
             if allowed:
+                ledger(category, how, "allow")
                 return None
             _audit("BLOCKED_PROMPT" if acting else "WOULD_BLOCK_PROMPT",
                    platform=platform, session=session, rule=category,
                    detail=f"via={how} text={excerpt}")
+            ledger(category, how, "block" if acting else "observe")
             if not acting:
                 return None  # 관측 모드 — 로그만 남기고 통과시킨다
             return blocked(category, BLOCK_NOTICE.format(desc=desc))
