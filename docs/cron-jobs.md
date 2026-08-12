@@ -49,12 +49,19 @@
 인젝션 표면이 그대로임. 요청 유형(요청·재질문·반문)과 개선 제안 여부만 원장 전용 보조
 분류기가 채우고, 그 값은 게이트 판정에 쓰이지 않음.
 
-등록 (에이전트는 크론 등록이 차단돼 있으므로 관리자가 실행):
+등록 (에이전트는 크론 등록이 차단돼 있으므로 관리자가 ssh 로 실행):
 
 ```bash
-sudo -u hermes hermes cron create --name slack-usage-report \
-  --script scripts/slack_usage_report.py --schedule "0 0 * * 1" --no-agent
+sudo -u hermes -H bash -lc "cd ~ && hermes cron create '0 0 * * 1' \
+  --name slack-usage-report --script slack_usage_report.py \
+  --no-agent --deliver local"
 ```
+
+인자 형태를 틀리기 쉬운 곳 세 군데 —
+
+- 스케줄은 **위치 인자**임. `--schedule` 플래그는 없음
+- `--script` 는 `~/.hermes/scripts/` 기준 **파일명만**. 경로를 붙이면 못 찾음
+- `-H` 로 `HOME` 을 hermes 로 맞춰야 함. 안 그러면 호출자의 홈을 봄
 
 ### 놓친 실행의 뒤늦은 수행
 
