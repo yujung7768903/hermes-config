@@ -204,8 +204,27 @@ plugins:
     prompt-gate:
       # observe : 분류만 하고 전부 통과. 감사 로그에 WOULD_BLOCK_PROMPT 로 기록
       # enforce : 미허용 카테고리를 실제로 차단
-      # 실사용 문구를 1~2주 관측해 오차단 0 을 확인한 뒤 enforce 로 바꾼다.
-      mode: observe
+      #
+      # [2026-08-12] observe → enforce. 관측 근거는 WOULD_BLOCK_PROMPT 105건이다.
+      #   실차단 대상   mutate 19 · deploy_restart_kill 17 · out_of_scope 13 ·
+      #                 credential 12 · prompt_injection 11 · development 3 · 기타 4
+      #   unknown 26    실제 범위 밖·공격 8 / **오차단 18**
+      #
+      # 즉 "오차단 0 을 확인한 뒤" 라는 원래 조건은 충족되지 않았다. 그럼에도 켠
+      # 이유는 observe 에서 실제 차단선이 정규식뿐이고, 그 패턴이 한국어 문형
+      # 위주라 영어 인젝션이 게이트 층에서 무방비였기 때문이다 (2026-08-12
+      # 19:35 영어 페르소나 탈취가 via=llm 으로 분류만 되고 모델까지 도달했다.
+      # 막은 것은 SOUL 방어였다).
+      #
+      # 오차단 18건의 성격 — 공격이 아니라 **판정 대상이 아닌 것**들이다.
+      #   시스템 이벤트 8 : Cronjob Response, 새 어시스턴트 스레드, /memory
+      #                     pending, "<@U…> 님이 채널에 참여함"
+      #   대화 조각 10   : "앙", "대답좀해줘", "업로드는 한거야?" 처럼 단독으로는
+      #                     뜻이 통하지 않아 unknown(fail-closed)으로 떨어진 후속 발화
+      # 이 둘은 on_block=notice 로 사용자에게 사유가 가므로 무응답으로 사라지진
+      # 않는다. 실사용에서 조각 오차단이 잦으면 context_turns 를 올리거나
+      # observe 로 되돌린다 — 되돌리기는 이 한 줄이다.
+      mode: enforce
 
       # notice : 원문을 버리고(모델에 아무것도 안 감) 사유는 게이트웨이가
       #          사용자에게 직접 보낸다
