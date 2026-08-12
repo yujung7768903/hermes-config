@@ -1,0 +1,7 @@
+name: usage-log
+version: 0.1.0
+description: 사용자별 요청·응답·토큰·요청분류를 한 행으로 남긴다 (관리자 리포트용 원장).
+author: platform
+kind: standalone
+provides_hooks:
+  - pre_gateway_dispatch

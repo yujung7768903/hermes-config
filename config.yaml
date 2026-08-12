@@ -192,6 +192,7 @@ plugins:
     - security-filter
     - slack-table
     - prompt-gate
+    - usage-log
   disabled: []
   entries:
     deploy-log:

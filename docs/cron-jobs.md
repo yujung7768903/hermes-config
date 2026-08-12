@@ -25,8 +25,36 @@
 | slack-improvement-report | `slack_improvement_report.py` | `0 6 * * 1-5` | 평일 15:00 | local |
 | slack-security-report | `security_report.py` | `0 1 * * *` | 매일 10:00 | local |
 | slack-security-watch | `security_watch.py` | `*/10 * * * *` | 10분마다 | local |
+| slack-usage-report | `slack_usage_report.py` | `0 0 * * 1` | 월 09:00 | local |
 
 전부 `no_agent: true` — 모델을 거치지 않고 스크립트만 실행함.
+
+## 사용 현황 리포트 (slack-usage-report)
+
+관리자 채널(`C0BPH28DLDN`)로 최근 7일 사용 현황을 보냄. 원장 하나만 읽음.
+
+| 항목 | 값 |
+| --- | --- |
+| 원장 | `logs/usage/usage.db` (`hooks/usage_log.py`). 보관 90일 |
+| 기록 시점 | 요청·게이트 판정 = prompt-gate `decide()` / 응답·토큰 = usage-log 플러그인 |
+| 보내는 것 | 본문(차트 2개) + 스레드(차트 1개 + 표 2개) |
+| 수동 확인 | `--days N` · `--channel` · `--db` · `--dry-run` |
+
+메시지를 둘로 나누는 이유 — Slack 은 **메시지당 `data_visualization` 블록 2개**까지만
+받음. 차트가 셋이라 나머지 하나를 스레드로 내림.
+
+원장에는 prompt-gate 카테고리를 **가공 없이** 그대로 넣음. 묶는 기준은 리포트
+스크립트의 `GROUPS` 하나뿐이라, 카테고리가 늘거나 정의가 바뀌면 그 표만 고치면 됨.
+게이트 분류기의 프롬프트·출력 스키마는 건드리지 않음 — 모델이 읽고 쓰는 것이 그대로여야
+인젝션 표면이 그대로임. 요청 유형(요청·재질문·반문)과 개선 제안 여부만 원장 전용 보조
+분류기가 채우고, 그 값은 게이트 판정에 쓰이지 않음.
+
+등록 (에이전트는 크론 등록이 차단돼 있으므로 관리자가 실행):
+
+```bash
+sudo -u hermes hermes cron create --name slack-usage-report \
+  --script scripts/slack_usage_report.py --schedule "0 0 * * 1" --no-agent
+```
 
 ### 놓친 실행의 뒤늦은 수행
 
