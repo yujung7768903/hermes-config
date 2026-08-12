@@ -48,7 +48,7 @@ GROUPS = {
     "데이터 조회": ("service_data_query",),
     "오류 분석":   ("incident_analysis",),
     "운영·정책":   ("project_docs_qa", "deploy_history_query", "db_schema_query"),
-    "에이전트":    ("agent_usage_query", "chitchat"),
+    "에이전트":    ("agent_usage_query", "chitchat", "conversation_followup"),
     "변경 요구":   ("mutate_code_config_data", "deploy_restart_kill", "skill_add",
                     "batch_schedule_add", "script_add", "development_request",
                     "agent_restart"),
