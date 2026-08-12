@@ -437,6 +437,34 @@ for i, text in enumerate(USAGE_ASK):
 check("  └ chitchat 설명에 사용법 문의가 적혀 있다",
       "yes" if "사용법" in gate_mod.ALLOWED["chitchat"] else "no", "yes")
 
+print("\n── 짧은 후속 발화는 conversation_followup 으로 통과한다 ──")
+# 2026-08-12 관측: WOULD_BLOCK_PROMPT 의 unknown 26건 중 10건이 이런 조각이었다.
+# 카테고리가 없어 fail-closed 기본값(unknown)으로 떨어졌고, enforce 에서는 그대로
+# 오차단이 된다. 조각은 위험한 게 아니라 혼자 뜻이 안 통하는 것이다.
+FRAGMENTS = ["앙", "대답좀해줘", "업로드는 한거야?", "이미 파일이 있진 않았어?",
+             "그 사실을 누구한테알려"]
+for i, text in enumerate(FRAGMENTS):
+    ctx = build(reply="conversation_followup", mode="enforce")
+    r = ctx.hooks["pre_gateway_dispatch"](event=FakeEvent(text, f"frag{i}"))
+    check(f"조각 통과: {text[:26]}", verdict(r), "allow")
+    ctx = build(raises=RuntimeError("분류기 죽음"), mode="observe")
+    r = ctx.hooks["pre_gateway_dispatch"](event=FakeEvent(text, f"fragb{i}"))
+    check("  └ 백스톱도 안 잡는다", verdict(r), "allow")
+
+check("conversation_followup 이 허용 카테고리에 있다",
+      "yes" if "conversation_followup" in gate_mod.ALLOWED else "no", "yes")
+check("  └ 조각 판정 순서가 분류기 프롬프트에 있다",
+      "yes" if "conversation_followup 으로 통과시키지 마라" in gate_mod.SYSTEM_PROMPT
+      else "no", "yes")
+
+# 쪼갠 우회가 이 카테고리로 새면 안 된다. 조각이 앞 발화와 합쳐져 차단 작업이
+# 되면 분류기는 그 작업 카테고리를 내야 하고, 게이트는 그대로 막아야 한다.
+for i, cat in enumerate(("mutate_code_config_data", "deploy_restart_kill",
+                         "prompt_injection", "script_add")):
+    ctx = build(reply=cat, mode="enforce")
+    r = ctx.hooks["pre_gateway_dispatch"](event=FakeEvent("그거 해줘", f"split{i}"))
+    check(f"조각이라도 합친 의도가 {cat} 면 차단", verdict(r), "skip")
+
 print("\n── 관리자 전용: 재시작 ──")
 RESTART_ASK = ["/restart", "!restart", "게이트웨이 재시작해줘",
                "너 재시작 해줘", "hermes restart 해줘"]
